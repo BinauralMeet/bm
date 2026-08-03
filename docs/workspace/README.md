@@ -14,7 +14,8 @@ bm/                        # このリポジトリ。運用ドキュメントと
 ├── binaural-meet/          # クライアント (React + MobX + mediasoup-client)
 ├── bmMediasoupServer/      # シグナリング/mediasoupサーバー (main + media プロセス)
 ├── vrcss/                  # 別系統の軽量クライアント (mediasoup-client + MUI)
-├── docs/                   # このディレクトリ
+├── docs/                   # このディレクトリ。3リポジトリ分のドキュメントもここに集約
+│   └── binaural-meet/      # 旧 binaural-meet/docs/ の内容(下記参照)
 ├── logs/                   # start-dev.sh / smoke.mjs の実行時出力 (git管理外)
 ├── start-dev.sh
 ├── smoke.mjs
@@ -27,8 +28,12 @@ bm/                        # このリポジトリ。運用ドキュメントと
   ベースの別クライアント。このワークスペースでの作業はまだ binaural-meet /
   bmMediasoupServer 側に偏っており、vrcss はほぼ未調査。
 
-各リポジトリの README/docs はそのリポジトリ自身のことだけを書く。3リポジトリを
-横断する話(このファイルや `dev-environment`、`architecture` topic)はここに書く。
+**ドキュメントは(コード自体とは違い)すべてこのリポジトリに集約する。**
+各リポジトリのコード自体は当然そのリポジトリに残るが、Markdownドキュメントは
+`docs/bin/doc` で索引・検索できるようこのツリー配下に置く
+(`docs/binaural-meet/` が旧 `binaural-meet/docs/` の内容。bmMediasoupServer/vrcss
+はまだ移していない)。各リポジトリの `README.md` は「そのコードを単体で
+clone した人向けの最小限の案内」だけに留める。
 
 ## 構成ファイル一覧
 
