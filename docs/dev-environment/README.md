@@ -27,6 +27,7 @@
 | `bmMediasoupServer/config.js` | `rtcMinPort`/`rtcMaxPort` をポートリースの払い出し範囲に合わせる |
 | `bmMediasoupServer/portfwd-lease-id.txt` / `portfwd-renew.sh` | 現在のリースを維持 |
 | `smoke.mjs`(ワークスペース直下) | 実際に入室ダイアログを操作して部屋に入り、状態をスクリーンショット |
+| `.env.local`(ワークスペース直下、gitignore済み) | このsandboxの実際の値(`BM_HOST`=実ホスト名、`BM_CDP`=headful debug ChromeのCDPエンドポイント)。`smoke.mjs`/`repro-avatar.mjs`が`envLocal.mjs`経由で読む。無ければプレースホルダー値にフォールバックし、実サーバーに繋がらない。`.env.local.example`をコピーして作る |
 
 ## 運用
 

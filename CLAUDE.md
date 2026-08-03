@@ -16,3 +16,7 @@ Writing rules for that tree: `docs/bin/doc show rules`.
 
 Dated history (what changed, when, why) lives in `docs/CHANGELOG.md` —
 `docs/bin/doc log` to browse it.
+
+`smoke.mjs`/`repro-avatar.mjs` need this sandbox's real hostname/CDP endpoint,
+which live in `.env.local` (gitignored, copy `.env.local.example` — see
+`docs/bin/doc show dev-environment#files`), not in the committed scripts.
