@@ -1,4 +1,4 @@
-# Testing Guide (ai1.haselab.net)
+# Testing Guide (test.binaural.me)
 
 **いつ読むか**: このホスト上でBinaural Meetを動かして手動・CDP経由でテストする
 
@@ -19,7 +19,7 @@ yarn start
 
 ```bash
 yarn start:sandbox-proxy
-# → https://ai1.haselab.net/sandbox/port3000/
+# → https://test.binaural.me/sandbox/port3000/
 ```
 
 初回アクセス時は Google OAuth ログインが必要。
@@ -31,17 +31,17 @@ Playwright または CDP 経由で操作できる。
 
 ### 接続情報
 
-- CDP エンドポイント: `ws://172.17.0.1:20001/...`
-- HTTP エンドポイント: `http://172.17.0.1:20001/json`
+- CDP エンドポイント: `ws://x.y.z.w:z/...`
+- HTTP エンドポイント: `http://x.y.z.w:z/json`
 - WebGL: ✅ SwiftShader ソフトウェアレンダリング
 - フェイクメディア: ✅ `--use-fake-device-for-media-stream`
-- ポート: `20000 + (uid - 1000)` (hase: uid=1001 → port 20001)
+- ポートはユーザーごとに割り当てられる(サンドボックス環境固有の採番)
 
 ### Playwright サンプル
 
 ```javascript
 const { chromium } = require('playwright');
-const browser = await chromium.connectOverCDP('http://172.17.0.1:20001');
+const browser = await chromium.connectOverCDP('http://x.y.z.w:z');
 const page = await browser.newPage();
 
 // エラー監視

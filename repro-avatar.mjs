@@ -5,11 +5,11 @@
 import {createRequire} from 'node:module'
 const {chromium} = createRequire('/home/hase/sandhome/bm/binaural-meet/')('playwright')
 
-const URL = 'https://ai1.haselab.net/sandbox/port3000/?room=smoke&name=avatarbot'
+const URL = 'https://test.binaural.me/sandbox/port3000/?room=smoke&name=avatarbot'
 const OUT = '/home/hase/sandhome/bm/logs'
 const PASTED = 'https://binaural.me/public_packages/uploader/vrm/avatar/maid.vrm'
 
-const browser = await chromium.connectOverCDP('http://172.17.0.1:20001')
+const browser = await chromium.connectOverCDP('http://x.y.z.w:z')  //  this sandbox's headful debug Chrome CDP endpoint
 const ctx = browser.contexts()[0] ?? await browser.newContext()
 //  Failed earlier runs leave their tabs (and their WebRTC transports, which mediasoup only has
 //  50 UDP ports for) open in the shared headful Chrome; close them so each run starts clean --

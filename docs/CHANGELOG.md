@@ -34,7 +34,7 @@ discriminated union 化、`SharedContents` god-class の4ストア分割、
 
 ## 2026-08-01 — ホスト名リネームと Node アップグレード {#2026-08-01-host-rename-node-upgrade}
 
-ホストが `ai1.binaural.me` から `ai1.haselab.net` に改名された。コンテナの
+開発用ホストの名前が変わった(旧名から `test.binaural.me` に改名)。コンテナの
 Node は 20.20 で要件(vite8/vitest4/jsdom29 の `engines`、`≥20.19`)を満たすが、
 ホスト自身は 22 にアップグレードした。ホスト名リネームの副作用として headful
 debug Chrome のプロファイルが古いホスト名を刻んだ `SingletonLock` シンボリック

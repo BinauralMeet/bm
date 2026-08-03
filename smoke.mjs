@@ -8,11 +8,11 @@
 import {createRequire} from 'node:module'
 const {chromium} = createRequire('/home/hase/sandhome/bm/binaural-meet/')('playwright')
 
-const CDP = 'http://172.17.0.1:20001'
+const CDP = 'http://x.y.z.w:z'  //  this sandbox's headful debug Chrome CDP endpoint
 //  No skipEntrance: that only suppresses the entrance dialog, and conference.enter() is called
 //  from TheEntrance's own onClose (or testBot mode), so skipping it means never connecting at
 //  all. The bot goes through the same dialog a human does.
-const URL = 'https://ai1.haselab.net/sandbox/port3000/?room=smoke&name=smokebot'
+const URL = 'https://test.binaural.me/sandbox/port3000/?room=smoke&name=smokebot'
 const OUT = '/home/hase/sandhome/bm/logs'
 
 const browser = await chromium.connectOverCDP(CDP)
