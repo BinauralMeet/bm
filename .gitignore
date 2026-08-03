@@ -1,8 +1,8 @@
 # Runtime output from start-dev.sh / smoke.mjs / repro-avatar.mjs.
 /logs/
 
-# Local-machine Claude Code settings, not shared.
-/.claude/settings.local.json
+# Local-machine Claude Code session/permission state, not shared.
+/.claude/
 __pycache__/
 
 # Real per-host values (hostname, CDP endpoint) for smoke.mjs/repro-avatar.mjs.
