@@ -1,0 +1,11 @@
+# Sibling repos with their own history/remotes -- not embedded here.
+/binaural-meet/
+/bmMediasoupServer/
+/vrcss/
+
+# Runtime output from start-dev.sh / smoke.mjs / repro-avatar.mjs.
+/logs/
+
+# Local-machine Claude Code settings, not shared.
+/.claude/settings.local.json
+__pycache__/
