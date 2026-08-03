@@ -9,3 +9,7 @@
 # Local-machine Claude Code settings, not shared.
 /.claude/settings.local.json
 __pycache__/
+
+# Real per-host values (hostname, CDP endpoint) for smoke.mjs/repro-avatar.mjs.
+# See envLocal.mjs -- committed files only ever contain placeholders.
+/.env.local

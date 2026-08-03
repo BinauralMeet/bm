@@ -6,13 +6,17 @@
 //  This file lives outside either repo, so resolve playwright out of the client's node_modules
 //  explicitly (ESM resolution is relative to the importing file, not cwd).
 import {createRequire} from 'node:module'
+import './envLocal.mjs'
 const {chromium} = createRequire('/home/hase/sandhome/bm/binaural-meet/')('playwright')
 
-const CDP = 'http://x.y.z.w:z'  //  this sandbox's headful debug Chrome CDP endpoint
+//  Real values for this sandbox come from .env.local (gitignored, see envLocal.mjs); these
+//  placeholders are what a fresh clone sees.
+const CDP = process.env.BM_CDP || 'http://x.y.z.w:z'  //  headful debug Chrome CDP endpoint
+const HOST = process.env.BM_HOST || 'test.binaural.me'
 //  No skipEntrance: that only suppresses the entrance dialog, and conference.enter() is called
 //  from TheEntrance's own onClose (or testBot mode), so skipping it means never connecting at
 //  all. The bot goes through the same dialog a human does.
-const URL = 'https://test.binaural.me/sandbox/port3000/?room=smoke&name=smokebot'
+const URL = `https://${HOST}/sandbox/port3000/?room=smoke&name=smokebot`
 const OUT = '/home/hase/sandhome/bm/logs'
 
 const browser = await chromium.connectOverCDP(CDP)
