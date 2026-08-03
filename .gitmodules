@@ -1,0 +1,9 @@
+[submodule "binaural-meet"]
+	path = binaural-meet
+	url = https://github.com/BinauralMeet/binaural-meet.git
+[submodule "bmMediasoupServer"]
+	path = bmMediasoupServer
+	url = https://github.com/BinauralMeet/bmMediasoupServer.git
+[submodule "vrcss"]
+	path = vrcss
+	url = https://github.com/BinauralMeet/vrcss.git
