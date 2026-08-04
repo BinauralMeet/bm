@@ -56,3 +56,13 @@ debug Chrome のプロファイルが古いホスト名を刻んだ `SingletonLo
 にタブを閉じずに残し、その WebRTC transport がUDPポートを保持し続けていたこと。
 スクリプト側で前回タブのクリーンアップを追加し、サーバー側も unhandled rejection
 でクラッシュしないよう修正。
+
+## 2026-08-04 — docs/bin を doc-tool サブモジュールに切り替え {#2026-08-04-doc-tool-submodule}
+
+`docs/bin/doc` はこれまで devsandbox ホストの `doc` スクリプトを手動でフォークして
+このリポジトリに直接コミットしていた。配布元が `haselab-net/doc-tool` として独立
+したため、`docs/bin` を git submodule(`https://github.com/haselab-net/doc-tool.git`)
+に置き換えた。あわせてそのリポジトリの `USERMAN.md` を初回導入コピーとして
+`docs/USERMAN.md` に追加(`docs/README.md` は既に手動フォーク版が存在し内容が
+実質同等だったため上書きせず維持)。ツール本体の更新は
+`git submodule update --remote docs/bin` で追従する。
