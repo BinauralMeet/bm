@@ -66,3 +66,11 @@ debug Chrome のプロファイルが古いホスト名を刻んだ `SingletonLo
 `docs/USERMAN.md` に追加(`docs/README.md` は既に手動フォーク版が存在し内容が
 実質同等だったため上書きせず維持)。ツール本体の更新は
 `git submodule update --remote docs/bin` で追従する。
+
+## 2026-08-04 — doc-tool 更新に追従(USERMAN.md → ForHuman.md) {#2026-08-04-doc-tool-forhuman-rename}
+
+`git submodule update --remote docs/bin` で doc-tool を追従(`USERMAN.md` を
+`ForHuman.md` にリネームし配布元ナラティブを削った変更)。`doc` 本体の
+`META_ORDER` がトピックid `ForHuman` を前提にしたため、`docs/USERMAN.md` を
+`docs/ForHuman.md` にリネームして upstream 版で上書きし、`docs/README.md` の
+`USERMAN` 参照も追従。

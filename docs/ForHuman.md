@@ -1,19 +1,21 @@
-# USERMAN — doc ツールの使い方と規約の背景（人間向け）
+# ForHuman — doc ツールの説明（人間向け）
 
-**いつ読むか**: doc ツールの全コマンドを知りたい / 規約がその形である理由を知りたい /
-消した内容を git から戻したい（Claude は通常不要。書くときの規約は `rules` に全部ある）
+**いつ読むか**: doc ツールが何なのか知りたい / 全コマンドを知りたい / 規約がその形である
+理由を知りたい / 消した内容を git から戻したい（Claude は通常不要。書くときの規約は
+`rules` に全部ある）
 
-## doc ツールとは {#tool}
+## これは何か {#tool}
 
-`docs/bin/doc` は devsandbox ホストの `/usr/local/share/doc/bin/doc` からフォークした同じ
-パーサー(index/full/show/grep/log/toc/check)。プロジェクトのドキュメントにも同じ
-低トークンの引き方を持たせるために移植したもので、パーサー本体は無変更。実装の詳細は
-そのファイル冒頭の docstring を参照。
+`haselab-net/doc-tool` は、Markdown で書かれた docs ツリー(topic ごとの README +
+CHANGELOG)を低トークンで検索・参照するための小さな CLI と、その docs ツリーの書き方規約
+一式。中身はこの3ファイルだけ:
+
+* `doc` — 本体スクリプト(index / show / grep / log / toc / check)。
+* `README.md` — 書き方規約(rules)。利用側プロジェクトの `docs/README.md` になるテンプレート。
+* `ForHuman.md` — このファイル。利用側プロジェクトの `docs/ForHuman.md` になるテンプレート。
 
 キャッシュや生成済み索引ファイルは持たない。この規模のツリーの全走査は数ミリ秒で終わる。
-
-このスクリプトと本ファイル・`README.md` は `haselab-net/doc-tool` リポジトリが配布元。
-利用側プロジェクトには git submodule として取り込む(下記 `##導入方法`)。
+索引は各 topic README の先頭2行(H1 と `**いつ読むか**:` 行)から `doc` が組み立てる生成物。
 
 ## 別プロジェクトへの導入方法 {#install}
 
@@ -24,16 +26,16 @@ git submodule add git@github.com:haselab-net/doc-tool.git docs/bin
 これで `docs/bin/doc` が実体として置かれる(symlink ではない)。`doc` は自分のファイルパスから
 2階層上をツリーの root と見なすので、`docs/bin/doc` という配置さえ守れば動く。
 
-`docs/bin/README.md`・`docs/bin/USERMAN.md` は `bin` 配下にあるため `doc` 自身の走査からは
+`docs/bin/README.md`・`docs/bin/ForHuman.md` は `bin` 配下にあるため `doc` 自身の走査からは
 除外される(`load()` が `bin` を含むパスを skip する)。使う側プロジェクトの `docs/README.md`
-(書き方規約=rules)と `docs/USERMAN.md` は別に必要 — 導入時にこの2ファイルを
-`docs/bin/README.md` → `docs/README.md`、`docs/bin/USERMAN.md` → `docs/USERMAN.md` として
+(書き方規約=rules)と `docs/ForHuman.md` は別に必要 — 導入時にこの2ファイルを
+`docs/bin/README.md` → `docs/README.md`、`docs/bin/ForHuman.md` → `docs/ForHuman.md` として
 一度コピーする(その後はプロジェクト側で自由に書き足してよい。ツール本体の更新は
 `git submodule update --remote docs/bin` で追従)。
 
 ```sh
 cp docs/bin/README.md docs/README.md
-cp docs/bin/USERMAN.md docs/USERMAN.md
+cp docs/bin/ForHuman.md docs/ForHuman.md
 ```
 
 ## コマンド {#usage}
