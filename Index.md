@@ -8,6 +8,10 @@ binaural-meet-auto-load-adjustment-design  自動負荷調整機能  [267L]
                                              → 自動負荷調整機能(クライアント側の負荷検出・購読数自動調整)を触る /
                                                `LoadAdjuster`/`LoadAdjusterLogic`の閾値・上限テーブルを調整する /
                                                この機能の 設計判断・見送った案を確認する
+binaural-meet-conference                   conference — 通話・シグナリングのオーケストレーション層  [116L]
+                                             → `src/models/conference/` に触る / `Conference`/`RtcTransports`/
+                                               `DataConnection`のどれに何を書けばいいか迷う /
+                                               入室・退室・再接続のフローを確認する
 binaural-meet-developmentguide             Development Guide  [76L]
                                              → binaural-meetの開発環境を初めてセットアップする /
                                                利用可能なyarnスクリプトを確認したい
