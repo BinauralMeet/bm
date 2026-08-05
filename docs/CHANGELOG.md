@@ -5,6 +5,13 @@
 
 日付が付く記録はここに。現在形の事実は各 topic README へ。
 
+## 2026-08-05 — bmMediasoupServer/vrcssにもdocsを新設 {#2026-08-05-bmms-vrcss-docs-added}
+
+残っていた2リポジトリにも`docs/bin`(doc-tool)を導入し、実コードを読んで
+`bmMediasoupServer-architecture`/`bmMediasoupServer-rtsp-streaming`/
+`vrcss-screen-sharing`を新設(自動集約されるので`bm`側の変更は無し)。
+これで3リポジトリ全てが同じ仕組みでdocsを持つ状態になった。
+
 ## 2026-08-05 — doc-toolにsubmodule集約を実装し、binaural-meetのdocsを本体に移動 {#2026-08-05-doc-tool-submodule-aggregation}
 
 `docs/binaural-meet/` にあった6つのdocs(architecture / development-guide /

@@ -14,7 +14,9 @@ bm/                        # このリポジトリ。運用ドキュメントと
 ├── binaural-meet/          # クライアント (React + MobX + mediasoup-client)
 │   └── docs/                # このリポジトリ自身のdoc-toolツリー(下記参照)
 ├── bmMediasoupServer/      # シグナリング/mediasoupサーバー (main + media プロセス)
+│   └── docs/                # 同上
 ├── vrcss/                  # 別系統の軽量クライアント (mediasoup-client + MUI)
+│   └── docs/                # 同上
 ├── docs/                   # このディレクトリ。bm自体の運用ドキュメント
 ├── logs/                   # start-dev.sh / smoke.mjs の実行時出力 (git管理外)
 ├── start-dev.sh
@@ -23,20 +25,20 @@ bm/                        # このリポジトリ。運用ドキュメントと
 ```
 
 - **binaural-meet** — remote: `https://github.com/BinauralMeet/binaural-meet.git`
-- **bmMediasoupServer** — remote: `https://github.com/BinauralMeet/bmMediasoupServer.git`
-- **vrcss** — remote: `https://github.com/BinauralMeet/vrcss.git`。mediasoup-client
-  ベースの別クライアント。このワークスペースでの作業はまだ binaural-meet /
-  bmMediasoupServer 側に偏っており、vrcss はほぼ未調査。
+- **bmMediasoupServer** — remote: `https://github.com/BinauralMeet/bmMediasoupServer.git`。
+  main(ゲートウェイ)/media(mediasoup worker)の2プロセス構成。クライアントは
+  binaural-meetとvrcssの両方。
+- **vrcss** — remote: `https://github.com/BinauralMeet/vrcss.git`。Chromeでの
+  画面共有をRTSP経由でVRChatのビデオプレイヤーへ配信するツール
+  (`bmMediasoupServer`のRTSP配信機能 + 外部のMediaMTXサーバーに依存)。
 
 **ドキュメントの実体は各リポジトリ自身に置く。** 各リポジトリが自分の
 `docs/bin/doc`(doc-tool)を導入すれば、そのリポジトリを単体でcloneしても
 docsを読める。この `bm/docs/bin/doc` は一つ上の階層の `.gitmodules` を見て、
 自分の `docs/CHANGELOG.md` を持つsubmoduleがあれば自動的にそのdocsも索引に
-混ぜる(`binaural-meet/docs/` を今はこの方法で取り込んでいる。topic idは
-`<submodule名>-<topic>` というフラットな形になる。例:
-`binaural-meet-architecture`)。bmMediasoupServer/vrcssにはまだdocs自体が無いので
-未導入。導入すれば自動的にここに混ざる(doc-tool側の変更は不要 — `ForHuman#workspace`
-参照)。
+混ぜる(3リポジトリとも導入済み。topic idは`<submodule名>-<topic>`という
+フラットな形になる。例: `binaural-meet-architecture`、
+`bmMediasoupServer-rtsp-streaming`、`vrcss-screen-sharing`)。
 
 ## 構成ファイル一覧
 
