@@ -24,7 +24,7 @@ binaural-meet-sharedcontents               Shared contents  [51L]
                                                / コンテンツの同期・zorder・RTCトラックの扱いを確認する
 binaural-meet-testingguide                 Testing Guide (test.binaural.me)  [114L]
                                              → このホスト上でBinaural Meetを動かして手動・CDP経由でテストする
-bmMediasoupServer-architecture             architecture — main/mediaサーバー構成とクライアントプロトコル  [103L]
+bmMediasoupServer-architecture             architecture — main/mediaサーバー構成とクライアントプロトコル  [105L]
                                              → `src/MainServer/`・`src/MediaServer/`・`src/DataServer/`のどこに
                                                何を書けばいいか迷う / `main.ts`と`media.ts`の関係を確認する /
                                                クライアント (binaural-meet/vrcss)との通信プロトコルを確認する
