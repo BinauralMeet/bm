@@ -12,10 +12,10 @@
 ```
 bm/                        # このリポジトリ。運用ドキュメントとdevスクリプトのみ
 ├── binaural-meet/          # クライアント (React + MobX + mediasoup-client)
+│   └── docs/                # このリポジトリ自身のdoc-toolツリー(下記参照)
 ├── bmMediasoupServer/      # シグナリング/mediasoupサーバー (main + media プロセス)
 ├── vrcss/                  # 別系統の軽量クライアント (mediasoup-client + MUI)
-├── docs/                   # このディレクトリ。3リポジトリ分のドキュメントもここに集約
-│   └── binaural-meet/      # 旧 binaural-meet/docs/ の内容(下記参照)
+├── docs/                   # このディレクトリ。bm自体の運用ドキュメント
 ├── logs/                   # start-dev.sh / smoke.mjs の実行時出力 (git管理外)
 ├── start-dev.sh
 ├── smoke.mjs
@@ -28,12 +28,15 @@ bm/                        # このリポジトリ。運用ドキュメントと
   ベースの別クライアント。このワークスペースでの作業はまだ binaural-meet /
   bmMediasoupServer 側に偏っており、vrcss はほぼ未調査。
 
-**ドキュメントは(コード自体とは違い)すべてこのリポジトリに集約する。**
-各リポジトリのコード自体は当然そのリポジトリに残るが、Markdownドキュメントは
-`docs/bin/doc` で索引・検索できるようこのツリー配下に置く
-(`docs/binaural-meet/` が旧 `binaural-meet/docs/` の内容。bmMediasoupServer/vrcss
-はまだ移していない)。各リポジトリの `README.md` は「そのコードを単体で
-clone した人向けの最小限の案内」だけに留める。
+**ドキュメントの実体は各リポジトリ自身に置く。** 各リポジトリが自分の
+`docs/bin/doc`(doc-tool)を導入すれば、そのリポジトリを単体でcloneしても
+docsを読める。この `bm/docs/bin/doc` は一つ上の階層の `.gitmodules` を見て、
+自分の `docs/CHANGELOG.md` を持つsubmoduleがあれば自動的にそのdocsも索引に
+混ぜる(`binaural-meet/docs/` を今はこの方法で取り込んでいる。topic idは
+`<submodule名>-<topic>` というフラットな形になる。例:
+`binaural-meet-architecture`)。bmMediasoupServer/vrcssにはまだdocs自体が無いので
+未導入。導入すれば自動的にここに混ざる(doc-tool側の変更は不要 — `ForHuman#workspace`
+参照)。
 
 ## 構成ファイル一覧
 
@@ -54,9 +57,17 @@ clone した人向けの最小限の案内」だけに留める。
 
 - モノレポツールが無いので、3リポジトリ間でバージョンや依存関係を揃える仕組みは
   無い。手動で追従する。
+- submoduleのCHANGELOGは `bm` 側の `doc log` には混ざらない。`doc check` の
+  相互参照検証も集約されたdocには行わない(`ForHuman#workspace` の既知の制限
+  参照)。どちらもそのsubmoduleに `cd` して確認する。
 
 ## 設計判断の記録
 
 - **モノレポ化はしない**: 3リポジトリはそれぞれ別の公開先・別のリリースサイクルを
   持つため、無理に1つのビルドグラフにまとめるより、`bm/` はドキュメントと
   横断的な運用スクリプトだけを持つ薄い層にとどめる方針にした。
+- **ドキュメントの集約方針を撤回した(2026-08-05)**: 以前は「ドキュメントは全て
+  `bm` に集約する」方針だったが、これだと各リポジトリを単体でcloneした人が
+  自分のコードの設計docsに一切アクセスできない、という問題があった。doc-tool
+  自体にsubmodule集約機能(`ForHuman#workspace`)を実装し、各リポジトリが自分の
+  docsを持ちつつ `bm` からは自動的に読みに行く形に変更した。

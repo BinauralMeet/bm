@@ -63,6 +63,30 @@ GitHub上でコマンドを叩かずに俯瞰したいときは、思い出し�
 自身がそれを新しい topic として拾ってしまうため直下に置く。Claude はこのファイルを読まないので
 多少古くても実害はない)。
 
+## ワークスペースでの複数リポジトリ集約 {#workspace}
+
+`bm/` の一つ上の階層はなく、`docs/` の一つ上(`bm/` 直下)に `.gitmodules` がある。
+そこに列挙された submodule が自分自身の `<submodule>/docs/CHANGELOG.md` を持つ場合、
+`load_all()` がそのdocsも自動的に読み込んで `bm` 側の索引に混ぜる(`doc`/`doc full`/
+`doc show`/`doc grep`/`doc check` すべてに反映される)。submodule側のtopic id
+(例: `architecture`)は `bm` 側では `<submodule名>-<topic>`(例:
+`binaural-meet-architecture`)というフラットなidになる。現在は `binaural-meet/docs/`
+がこの方法で取り込まれている。
+
+- これはキャッシュや生成ファイルではなく、実行ごとに `.gitmodules` と各submoduleの
+  `docs/` を毎回スキャンして組み立てる(上の「キャッシュや生成済み索引ファイルは
+  持たない」という方針と同じ)。
+- submodule側は `bm` の存在を一切知らなくてよい。`binaural-meet/docs/bin/doc` を
+  そのディレクトリ単体で(`bm` を経由せず単体cloneした状態で)動かしても同じtopic id
+  で同じ内容が見える。
+- **既知の制限**: submodule自身の `rules`/`ForHuman`/`CHANGELOG` は集約対象から
+  外れる(`bm` の `doc log` に子repoの日付履歴までは混ざらない)。それらを見るには
+  対象のsubmoduleに `cd` してそこの `docs/bin/doc` を直接使う。
+- **既知の制限**: `doc check` の相互参照検証(参照先が無いidの検出)は集約された
+  docには実行しない。子repo内だけで有効な bare な `CHANGELOG` トピックへの参照
+  などは `bm` 側で見ると別物に見えるため、`bm` 視点での検証は意味を持たない。
+  そのsubmoduleに `cd` して `doc check` を実行するのが正しい検証方法。
+
 ## 規約がこの形である理由 {#why}
 
 - **索引は生成物**: 各 topic README の先頭2行(H1 と `**いつ読むか**:` 行)から `doc` が

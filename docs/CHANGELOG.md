@@ -5,22 +5,26 @@
 
 日付が付く記録はここに。現在形の事実は各 topic README へ。
 
+## 2026-08-05 — doc-toolにsubmodule集約を実装し、binaural-meetのdocsを本体に移動 {#2026-08-05-doc-tool-submodule-aggregation}
+
+`docs/binaural-meet/` にあった6つのdocs(architecture / development-guide /
+testing-guide / shared-contents / auto-load-adjustment-design /
+refactoring-plan-done)を `binaural-meet/docs/` に移した。あわせて
+`binaural-meet` にも `docs/bin`(doc-tool)を導入し、単体cloneでも
+`docs/bin/doc` が使えるようにした。
+
+`bm/docs/bin/doc` 側は `load_all()` を追加し、`.gitmodules` に載っている
+submoduleが自分の `docs/CHANGELOG.md` を持っていれば自動的にそのdocsを索引に
+混ぜるようにした(`ForHuman#workspace`)。topic idは移動前と同じ
+`binaural-meet-architecture` 等のまま変わらない。詳細・撤回した旧方針の理由は
+`workspace` の設計判断の記録を参照。
+
 ## 2026-07-28 — binaural-meet と bmMediasoupServer を bm/ に集約 {#2026-07-28-workspace-consolidation}
 
 それまで `binaural-meet` 単独で `/home/hase/sandhome/binaural-meet` に、
 `bmMediasoupServer` は Claude から触れない場所にあった。両方を `bm/` 直下に集約し、
 以後は組み合わせワークスペースとして扱う方針にした。モノレポ化はしていない
 (2リポジトリ+vrcssはそれぞれ独立した git リポジトリ・remoteのまま)。
-
-## 2026-07-28 — binaural-meet アーキテクチャ整理ロードマップ完了 {#2026-07-28-refactor-roadmap}
-
-`refactor/architecture-cleanup` ブランチで9フェーズの構造整理を実施(store群の
-ドメイン再編、`SharedContents` ↔ `conference` の循環依存解消、`ISharedContent` の
-discriminated union 化、`SharedContents` god-class の4ストア分割、
-`StereoParameters` 命名衝突の解消、GDrive認証状態の集約)。詳細は binaural-meet
-リポジトリの `docs/refactoring-plan-DONE.md`(完了記録として保持)とその
-コミット履歴(`git log`、各 "Phase N: ..." コミット)を参照。PRはまだオープンして
-いない。
 
 ## 2026-07-28 — ROOM_PROPのキューイング衝突バグ修正 {#2026-07-28-room-prop-fix}
 
