@@ -4,9 +4,10 @@ binaural-meet-architecture                 architecture — binaural-meetのレ�
                                              → `stores/` 配下に新しいimportを足す / `conference` と
                                                `sharedContent`(または他のstore)の間で依存を追加しようか迷う / 循環依存の
                                                警告やバンドルの問題に遭遇した
-binaural-meet-auto-load-adjustment-design  自動負荷調整機能 設計 (ドラフト)  [311L]
-                                             → 自動負荷調整機能(クライアント側の負荷検出・購読数自動調整)を実装する /
-                                               この設計の前提・却下案を確認する
+binaural-meet-auto-load-adjustment-design  自動負荷調整機能  [267L]
+                                             → 自動負荷調整機能(クライアント側の負荷検出・購読数自動調整)を触る /
+                                               `LoadAdjuster`/`LoadAdjusterLogic`の閾値・上限テーブルを調整する /
+                                               この機能の 設計判断・見送った案を確認する
 binaural-meet-developmentguide             Development Guide  [76L]
                                              → binaural-meetの開発環境を初めてセットアップする /
                                                利用可能なyarnスクリプトを確認したい
