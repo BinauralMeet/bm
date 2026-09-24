@@ -5,6 +5,33 @@
 
 日付が付く記録はここに。現在形の事実は各 topic README へ。
 
+## 2026-09-24 — STT・翻訳字幕を実装 {#2026-09-24-stt-translation-implemented}
+
+`stt-translation`の設計に沿って3リポジトリに実装した(書き出し機能を除く)。
+コミットは`bm` `5acde08`(設計doc)、`bmMediasoupServer` `7ff08cf`、
+`binaural-meet` `c551d55`。いずれも`feature/stt-translation`ブランチ。
+
+**動作確認**: `ffmpeg`がこのコンテナに無いため音声取り出しは動かせない
+(`stt-translation#limits`)。そこで**workerのふりをして`sttResult`を直接main serverへ
+送り**、認識結果から字幕までを実機で確認した:
+
+1. `start-dev.sh`で4プロセス起動、CDPで`?room=sttverify`に入室。
+2. Nodeから`ws://localhost:3100`に接続し`workerAdd`で登録、直後に
+   `workerUpdate`で`load: 1e9`を報告(これを忘れると`getVacantWorker()`が
+   本物のpeerをこの偽workerへ回してしまう)。
+3. `sttResult`を送って確認できたこと: 途中結果が吹き出しに出る →
+   同じ`sid`の確定結果が**同じ発話を上書き**する(2件に増えない) →
+   **連続した確定結果2件が両方届く**(`Stores.ts`のマージ除外が効いている) →
+   後から来た訳文がチャット欄の既存行を**その場で書き換える** →
+   バックエンド未設定で`sttStart`すると`stt is not configured on this server`が
+   返りクライアント側のスイッチが自動でオフに戻る。ページエラーなし。
+4. 発見して直したバグ1件: 吹き出しが1文字幅の縦棒になっていた。参加者のルートdivが
+   0x0で、絶対配置の子が幅を解決できていなかった(`width: max-content`で修正)。
+   スクリーンショット: `logs/stt-final.png`、`logs/stt-translated.png`。
+
+未確認のまま残っているのは**音声取り出しと認識サイドカーとの疎通**で、これは
+ホスト側の準備(`stt-translation#hostwork`)が要る。
+
 ## 2026-09-24 — STT・翻訳字幕の設計を新設(サーバー側認識に決定) {#2026-09-24-stt-translation-design}
 
 BMに音声認識と翻訳を付けたいという要望から、3リポジトリに跨る設計を
