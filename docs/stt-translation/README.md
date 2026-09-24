@@ -4,9 +4,9 @@
 `DataServer`の翻訳ハンドラに触る / 字幕が出ない・訳文が来ない原因を切り分ける /
 STTエンジンや翻訳バックエンドを差し替える / rtx5070tiをBMの認識バックエンドとして使う
 
-実装済み(2026-09-24)。ただし**音声を取り出す部分だけは未検証** —
-このコンテナに`ffmpeg`が入っておらず動かせないため(`#limits`)。
-認識バックエンドも未設定なので、既定では機能はオフのまま。
+BM側は実装済み(2026-09-24)。ただし**音声を取り出す部分だけは未検証** —
+このコンテナに`ffmpeg`が無く、サイドカーにも届かないため。**残っているのはホスト側の
+作業だけで、`#hostwork` にまとめてある**。
 決定に至る経緯と却下した案は `#design`、何がどこまで通っているかは `#phases`。
 
 ## 構成 {#arch}
@@ -305,43 +305,44 @@ UIはフッターのマイクボタン隣にSTTボタン(ON/OFFと、話す言�
 サイドカーは4点とも揃い`config.js`に配線済み(2026-09-24、`CHANGELOG#stt-hostwork-sidecars`)。
 残っているのは:
 
-- **書き出し**(未実装)。
-- **音声取り出しから字幕までを一本で通すこと**。このコンテナには`ffmpeg`が無く、
-  サイドカーにも届かない(`#hostwork`)ので、**ホスト上の実サーバーで動かして初めて
-  確認できる**。BM側のコードはその2点以外すべて実機で通してある。
+- **書き出し**(未実装。BM側の作業)。
+- **音声取り出しから字幕までを一本で通すこと**。BM側のコードは他すべて実機で通してあり、
+  ここだけは`ffmpeg`とサイドカーへの到達性が要る — **どちらもホスト側の作業で、
+  `#hostwork`の「残っているホスト作業」にまとめてある**。
 
 ## ホスト側で必要な準備 {#hostwork}
 
-**このコンテナの中からはできない作業**をここに集約する。BM側は下記が揃わなくても
-`cpuWhisper` だけで動くので、これらは「揃えば品質が上がる」という位置付けであり、
-実装の前提条件ではない。4点とも揃い、`config.js`の`stt.backends`/`translation.endpoint`に
-配線済み(`CHANGELOG#stt-hostwork-sidecars`)。
+**このコンテナの中からはできない作業**をここに集約する。BMのコードは全て実装済みなので、
+音声から字幕までを一本で通せるかどうかは、以下が揃うかどうかだけで決まる。
 
-| # | 必要なもの | 状態 |
+### 残っているホスト作業 {#todo}
+
+上から順に、詰まり具合の大きい順。**1が無いと音声認識はどこでも動かない。**
+
+| # | やること | BMが何を期待するか / 確認方法 |
 |---|---|---|
-| 1 | 認識サービスへのHTTPパス(rtx5070tiのSenseVoice、マシン上のport 8189) | **既に用意されていた**。`lm.haselab.net`の`/SENSEVOICE/`(`lm-tool#arch`のGPU切り替え対象、BMとは別の目的で先に公開済み)がそのまま使える(`config.js`の`stt.backends[0].endpoint`は`https://lm.haselab.net/SENSEVOICE/asr`)。**未検証**: 疎通確認にはrtx5070tiの共有GPUを`sensevoice`モードへ切り替える必要があり、BMは自分ではモードを切り替えない設計(`#fallback`)なので、他の用途を止めてまで試していない。次に誰かが実際に`sensevoice`モードで動かした会議が最初の実地確認になる |
+| 1 | **`ffmpeg` を入れる**(`media.ts` を動かすマシン。このコンテナには入っておらず、rootも無いので中からは入れられない) | `PATH` から `ffmpeg` が起動できること。`ffmpeg -version`。これが無いと `sttStart` はffmpegのspawnで失敗し、**音声取り出しが一切動かない**。RTSP配信(`bmMediasoupServer-rtsp-streaming`)も同じ前提なので、本番機には既に入っている可能性が高い — まず確認するだけでよい |
+| 2 | **サイドカーをコンテナから届くようにする、または「開発中は使わない」と決める** | コンテナ内から `curl http://172.17.0.1:8190/health` と `:8191/health` が200を返すこと。現状は両方ともホストの`127.0.0.1`でのみ待受けており、コンテナからは`127.0.0.1`も`172.17.0.1`も接続不可。**判断が要る**: docker0のアドレス(`172.17.0.1`)にも待受けさせれば届く(headful ChromeのCDPが同じ方法でコンテナに見えている)が、**同じホストの全コンテナ=全sandboxユーザーに無認証で開く**ことになる。開発中はサイドカーを使わない(=モックで済ませる)という選択も十分あり得る |
+| 3 | **本番配置で `LM_HASELAB_API_KEY` を環境変数に入れる** | `stt.backends[].apiKeyEnv` が指す環境変数が設定されていること。キーはホストの`/opt/lm-tool/lm-tool.env`にあるが環境変数としては入っていない。未設定だと`lm.haselab.net`側へ無認証で投げて弾かれ、**「GPUが塞がっている」のと区別の付かない失敗**になる。開発用は`start-dev.sh`が起動前に読み込むようにした |
+| 4 | **`sensevoice` の疎通を一度確認する**(任意) | rtx5070tiを`sensevoice`モードにできるタイミングで、`npx ts-node src/MediaServer/__tests__/sttBackendLive.ts https://lm.haselab.net/SENSEVOICE/asr https://lm.haselab.net/SWITCH5070TI`(`#ops`)。BMは自分ではモードを切り替えない(`#fallback`)ので、**他の用途を止めてまで急ぐ必要はない**。放置しても`cpuWhisper`へ落ちるだけ |
+
+1と2が揃えば、このワークスペースから音声→字幕を一本で通した確認ができる。
+1だけでも、本番機(ホスト上で動く配置)なら通る。
+
+### 済んでいるもの {#done}
+
+4点とも揃い、`config.js`の`stt.backends`/`translation.endpoint`に配線済み
+(`CHANGELOG#stt-hostwork-sidecars`)。
+
+| # | 用意したもの | 状態 |
+|---|---|---|
+| 1 | 認識サービスへのHTTPパス(rtx5070tiのSenseVoice、マシン上のport 8189) | **既に用意されていた**。`lm.haselab.net`の`/SENSEVOICE/`(`lm-tool#arch`のGPU切り替え対象、BMとは別の目的で先に公開済み)がそのまま使える(`config.js`の`stt.backends[0].endpoint`は`https://lm.haselab.net/SENSEVOICE/asr`)。疎通は未確認(上の作業4) |
 | 2 | 上記パスのロック状態の読み取り | **既に用意されていた**。`https://lm.haselab.net/SWITCH5070TI/lock/status`が実機確認済み(`GET`→`{"locked":false}`、2026-09-24) |
-| 3 | 翻訳サービス(CTranslate2 + opus-mt系)のHTTPパス | 新設。`bm/stt-sidecars`(別リポジトリ、bmワークスペースの兄弟ディレクトリ)が`http://localhost:8191/translate`をこのホストのCPUで提供、systemd管理。ja→en/en→jaで実機確認済み。詳細・なぜHelsinki-NLPのen->jap系を採らずFuguMTにしたかは`bm/stt-sidecars/README.md` |
+| 3 | 翻訳サービス(CTranslate2 + FuguMT)のHTTPパス | 新設。`bm/stt-sidecars`(別リポジトリ、bmワークスペースの兄弟ディレクトリ)が`http://localhost:8191/translate`をこのホストのCPUで提供、systemd管理。ja→en/en→jaで実機確認済み。詳細・なぜHelsinki-NLPのen->jap系を採らずFuguMTにしたかは`bm/stt-sidecars/README.md` |
 | 4 | 縮退用の `cpuWhisper` サイドカー(faster-whisper small、CPU) | 新設。同じく`bm/stt-sidecars`が`http://localhost:8190/asr`で提供、systemd管理。実音声で実機確認済み |
 
 BM側はどれも「エンドポイントURLを `config.js` に書くだけ」で繋がる形にしてあり、
-サービスの実装・配置・認証方式には依存しない。ただし繋ぐ側の足回りで2点ある。
-
-- **3・4のサイドカーはホストの`127.0.0.1`でのみ待受けており、sandboxコンテナからは届かない。**
-  `config.js`の`http://localhost:819x`が成立するのは、サーバーをホスト上で動かす本番配置
-  (`vrc-jp#files`)だけ。**このワークスペースの開発チェックアウトは常にコンテナの中で動く**
-  (`dev-environment#ops`)ため、そのままでは両サイドカーとも接続失敗になり、
-  STTは`sensevoice`だけ・翻訳は無効という状態で動く(フォールバック設計のとおり、
-  字幕が原文のまま出るか、全滅なら静かに止まるだけで通話は壊れない)。
-  コンテナから使いたい場合は、ホスト側でdocker0のアドレス(`172.17.0.1`)にも
-  待受けさせる必要がある(headful ChromeのCDPが同じ方法でコンテナに見えている)。
-  ただし**それは同じホストの全コンテナ=全sandboxユーザーに無認証で開くことを意味する**ので、
-  「開発中はコンテナから実サイドカーを使わない」という判断も十分あり得る。
-- **APIキーは環境変数で渡す。** `stt.backends[].apiKeyEnv`(既定`LM_HASELAB_API_KEY`)が
-  指す環境変数が未設定だと、`lm.haselab.net`側のバックエンドへ無認証で投げて弾かれ、
-  「GPUが塞がっている」のと区別の付かない失敗になる。キーはホストの
-  `/opt/lm-tool/lm-tool.env`にあり環境変数としては入っていないので、`start-dev.sh`が
-  mediaサーバーの起動前にこれを読み込む。本番配置でも同じ手当てが要る。
+サービスの実装・配置・認証方式には依存しない。
 
 ## セキュリティ上の要点 {#security}
 
@@ -405,10 +406,10 @@ GPU1枚で捌ける同時話者数は**未計測**。Phase 1 で実測してこ�
 
 ## 既知の制限 {#limits}
 
-- **このコンテナに `ffmpeg` が入っていない**(rootも無いので入れられない)。
-  音声を取り出す部分はここでは一切動かせず、`sttStart` は ffmpeg の spawn で失敗する。
-  RTSP配信(`bmMediasoupServer-rtsp-streaming`)も同じ前提に立っているので、
-  これはこの機能に固有の問題ではなく、このコンテナ全体の制約。
+- **このコンテナでは音声取り出しを動かせない。** `ffmpeg`が入っておらず(rootも無い)、
+  `sttStart`はffmpegのspawnで失敗する。サイドカーにも届かない。どちらもホスト側の
+  作業なので `#hostwork` を見ること。RTSP配信(`bmMediasoupServer-rtsp-streaming`)も
+  ffmpegを前提にしているので、これはこの機能に固有の問題ではない。
 
 - **途中結果の遅延はブラウザ内認識より大きい。** RTP→ffmpeg→VAD→認識→DataServerの
   ポーリング配信を通るため、話者自身の字幕も往復してから出る。
