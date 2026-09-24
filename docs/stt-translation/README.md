@@ -288,32 +288,35 @@ UIはフッターのマイクボタン隣にSTTボタン(ON/OFFと、話す言�
 | 部分 | 状態 |
 |---|---|
 | 音声取り出し(PlainTransport + ffmpeg + VAD + 再認識ループ) | 実装済み・**未検証**。`ffmpeg`がこのコンテナに無く動かせない |
-| 認識バックエンドの選択とフォールバック | 実装済み。ロジックは単体テスト済み、実バックエンドとの疎通は未確認 |
+| 認識バックエンドの選択とフォールバック | 実装済み。ロジックは単体テスト済み。`cpuWhisper`は実バックエンドとの疎通も確認済み、`sensevoice`は`config.js`に配線済みだが未確認(`#hostwork`) |
 | 認識結果の注入・配信(`sttIngest`) | 実装済み・実機確認済み |
 | `Transcript`ストア・吹き出し・チャット欄・設定UI | 実装済み・実機確認済み |
-| 翻訳(`translation.ts`) | 実装済み。翻訳先集合とキャッシュは単体テスト済み、バックエンド未設定のため実機未確認 |
+| 翻訳(`translation.ts`) | 実装済み。翻訳先集合とキャッシュは単体テスト済み、バックエンドも配線・実機確認済み(ja<->en) |
 | Recorder/Playerへの登録 | 実装済み(`recordable`・`onPlayback`)・未検証 |
 | テキスト/VTT書き出し | **未実装** |
 
-残っている大物は2つ: **認識サイドカーとの実疎通**(`#hostwork`)と、**書き出し**。
-前者が通れば、音声取り出しから字幕表示までが初めて一本に繋がる。
+残っている大物は1つ: **書き出し**(未実装)。認識サイドカーとの実疎通は`#hostwork`の
+4点が揃い`config.js`に配線済みで、`sensevoice`以外は実機確認済み(2026-09-24、
+`CHANGELOG#stt-hostwork-sidecars`)。音声取り出し(`ffmpeg`)自体はまだこのコンテナ内で
+動かせないため、字幕表示までの一本の経路は次にこのコンテナの外(実サーバー)で動かして
+初めて確認できる。
 
 ## ホスト側で必要な準備 {#hostwork}
 
 **このコンテナの中からはできない作業**をここに集約する。BM側は下記が揃わなくても
 `cpuWhisper` だけで動くので、これらは「揃えば品質が上がる」という位置付けであり、
-実装の前提条件ではない。
+実装の前提条件ではない。4点とも揃い、`config.js`の`stt.backends`/`translation.endpoint`に
+配線済み(`CHANGELOG#stt-hostwork-sidecars`)。
 
-| # | 必要なもの | BMがそれに何を期待するか |
+| # | 必要なもの | 状態 |
 |---|---|---|
-| 1 | 認識サービスへのHTTPパス(rtx5070tiのSenseVoice、マシン上のport 8189)。`lm.haselab.net` に公開されているのは `/COMFYUI` と `/SWITCH5070TI` だけで、認識用のパスが無い | `POST <endpoint>` に 16kHz/mono/s16le のWAVまたは生PCMを送ると `{"text":"...","lang":"ja"}` 相当が返ること。認証は他のパスと同じAPIキー方式でよい |
-| 2 | 上記パスのロック状態の読み取り。既存の `/SWITCH5070TI/lock/status` がそのまま使えるなら追加作業は無い | `GET <gpuStatus>/lock/status` が `{"locked":bool}` を返すこと。**BMは読むだけで、取得も解放もしない**(`#fallback`) |
-| 3 | 翻訳サービス(CTranslate2 + opus-mt)のHTTPパス。GPUを使わないので、このホストのCPU上で動かしてよい | `POST <endpoint>` に `{texts:[], src:'ja', dsts:['en']}` を送ると言語→訳文のマップが返ること |
-| 4 | 縮退用の `cpuWhisper` サイドカー(faster-whisper small、CPU)。これもこのホスト上でよい | #1 と同じ入出力。BMからは `http://localhost:<port>` で届くこと |
+| 1 | 認識サービスへのHTTPパス(rtx5070tiのSenseVoice、マシン上のport 8189) | **既に用意されていた**。`lm.haselab.net`の`/SENSEVOICE/`(`lm-tool#arch`のGPU切り替え対象、BMとは別の目的で先に公開済み)がそのまま使える(`config.js`の`stt.backends[0].endpoint`は`https://lm.haselab.net/SENSEVOICE/asr`)。**未検証**: 疎通確認にはrtx5070tiの共有GPUを`sensevoice`モードへ切り替える必要があり、BMは自分ではモードを切り替えない設計(`#fallback`)なので、他の用途を止めてまで試していない。次に誰かが実際に`sensevoice`モードで動かした会議が最初の実地確認になる |
+| 2 | 上記パスのロック状態の読み取り | **既に用意されていた**。`https://lm.haselab.net/SWITCH5070TI/lock/status`が実機確認済み(`GET`→`{"locked":false}`、2026-09-24) |
+| 3 | 翻訳サービス(CTranslate2 + opus-mt系)のHTTPパス | 新設。`bm/stt-sidecars`(別リポジトリ、bmワークスペースの兄弟ディレクトリ)が`http://localhost:8191/translate`をこのホストのCPUで提供、systemd管理。ja→en/en→jaで実機確認済み。詳細・なぜHelsinki-NLPのen->jap系を採らずFuguMTにしたかは`bm/stt-sidecars/README.md` |
+| 4 | 縮退用の `cpuWhisper` サイドカー(faster-whisper small、CPU) | 新設。同じく`bm/stt-sidecars`が`http://localhost:8190/asr`で提供、systemd管理。実音声で実機確認済み |
 
 BM側はどれも「エンドポイントURLを `config.js` に書くだけ」で繋がる形にしてあり、
-サービスの実装・配置・認証方式には依存しない。**用意できた順に `stt.backends` の
-配列へ足していけばよい**(先頭から順に試され、失敗したら次へ落ちる)。
+サービスの実装・配置・認証方式には依存しない。
 
 ## セキュリティ上の要点 {#security}
 

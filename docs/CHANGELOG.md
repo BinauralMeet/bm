@@ -132,3 +132,54 @@ debug Chrome のプロファイルが古いホスト名を刻んだ `SingletonLo
 `META_ORDER` がトピックid `ForHuman` を前提にしたため、`docs/USERMAN.md` を
 `docs/ForHuman.md` にリネームして upstream 版で上書きし、`docs/README.md` の
 `USERMAN` 参照も追従。
+
+## 2026-09-24 — STT認識・翻訳サイドカーのホスト側準備4点を用意・`config.js`へ配線 {#stt-hostwork-sidecars}
+
+`stt-translation#hostwork` の4点(認識サービス・ロック読み取り・翻訳サービス・
+`cpuWhisper`縮退サイドカー)を調べたところ、1・2(SenseVoice `/SENSEVOICE/`・
+`/SWITCH5070TI/lock/status`)はBMとは別の目的(`lm-tool`のGPU切り替え機能、
+`CHANGELOG-006#lm-tool-gpu-lock`)で既に`lm.haselab.net`に公開済みだった。
+3・4(翻訳・`cpuWhisper`)は未着手だったため新設した。
+
+**3・4: `bm/stt-sidecars`(新しい兄弟リポジトリ、`binaural-meet`/`bmMediasoupServer`とは
+別、`stt-translation#files`の「(別リポジトリ)STT/翻訳サイドカー」)**——コードは
+`~/sandhome/bm/stt-sidecars`(git管理)、venvと変換済みモデルは`/opt/lm-tool`と同じ
+考え方で`/opt/stt-sidecars/{venv,models,hf-cache}`(git管理外、`scripts/convert_models.sh`で
+再現可能)。
+
+- `cpu_whisper_server.py`: faster-whisper `small`(CPU int8)、`POST /asr?lang=<hint>`。
+  実音声(whisper.cppのサンプル`jfk.wav`)で正しい書き起こしを確認。
+- `translate_server.py`: CTranslate2 + `staka/fugumt-{ja-en,en-ja}`(HFの
+  `Helsinki-NLP/opus-mt-en-jap`ではない——理由は`bm/stt-sidecars/README.md#models`、
+  JW300学習で会話文だと無関係な訳文になることを実機で確認したため差し替えた)。
+  `POST /translate {texts,src,dsts} -> {lang:[...]}`。
+- 両方とも systemd ユニット(`stt-cpu-whisper.service`・`stt-translate.service`、
+  `bm/stt-sidecars/systemd/`からこのホストの`/etc/systemd/system/`へコピー、
+  `User=hase`、`127.0.0.1`のみ待受・認証なし)。共有ホストなので
+  `Nice=10`・`CPUWeight=30`・`MemoryMax`(2G/1G)で他ユーザーの作業を圧迫しない設定。
+
+```sh
+# /opt/stt-sidecars/ セットアップ(bm/stt-sidecars/README.md の手順そのもの)
+python3 -m venv /opt/stt-sidecars/venv
+/opt/stt-sidecars/venv/bin/pip install -r requirements.txt
+./scripts/convert_models.sh
+/opt/stt-sidecars/venv/bin/pip uninstall -y transformers torch  # 変換専用、実行時は不要
+cp systemd/stt-cpu-whisper.service systemd/stt-translate.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now stt-cpu-whisper stt-translate
+```
+
+`bmMediasoupServer/config.js`(このリポジトリの開発チェックアウト、feature/stt-translation
+ブランチ。本番配置`/root/webapp/bmMediasoupServer`、`vrc-jp#files`、へは未反映・未デプロイ)
+の`stt.backends`に`sensevoice`(既存の`/SENSEVOICE/`・`/SWITCH5070TI`)と`cpuWhisper`
+(`http://localhost:8190/asr`)、`translation.endpoint`に`http://localhost:8191/translate`を追加。
+
+**動作確認**: `curl`で`http://127.0.0.1:8190/health`・`8191/health`が200、
+`POST 8190/asr`(`jfk.wav`)が正しい英文書き起こし、`POST 8191/translate`が
+ja→en/en→jaとも自然な訳文を返すことを確認。`systemctl restart`後も同じ結果
+(モデルは`/opt/stt-sidecars/hf-cache`・`models/`からのみロードされ、
+`transformers`/`torch`をアンインストール後も影響しないことを確認)。
+`sensevoice`(`https://lm.haselab.net/SENSEVOICE/asr`)は未検証——rtx5070tiの共有GPUを
+`sensevoice`モードに切り替える必要があり、BMは自分ではモード切り替えをしない設計
+(`stt-translation#fallback`)なので、他の用途(確認時点は`hidream`が使用中)を止めてまで
+試していない。`cd bmMediasoupServer && npx vitest run`(既存40件)は無変更で全通過。
