@@ -5,6 +5,30 @@
 
 日付が付く記録はここに。現在形の事実は各 topic README へ。
 
+## 2026-09-24 — 翻訳が一度も走らないバグを修正(字幕言語を入室時に通知していなかった) {#2026-09-24-stt-lang-on-join}
+
+headful Chromeを再起動してもらいCDP確認を再開したところ、**翻訳が1件も走らない**ことが
+分かった(モックへのリクエストがゼロ)。`d.conference.dataConnection.sendMessage('p_lang',
+{speak:'ja',show:'en'})`をページから手で送ると翻訳される一方、`d.settings.sttShow`を
+変えるだけでは送られない、という切り分けから原因を特定した。
+
+**原因**: `SttClient`が`PARTICIPANT_STT_LANG`をMobXの`autorun`からしか送っておらず、
+その`autorun`は`conference.dataConnection.isConnected()`が偽の間は早期returnしていた。
+**接続状態はobservableではない**ため、`enter()`中の初回実行(まだ接続前)が最後の実行に
+なる。字幕言語はlocalStorageから入室前に復元されるので、**戻ってきた利用者は設定を
+一度も「変更」せず、結果として誰も翻訳先言語を申告しない**——サーバーから見ると
+部屋の全員が翻訳不要に見える。
+
+**修正**: `DataSync.sendAllAboutMe()`(接続時と`REQUEST_ALL`/`REQUEST_TO`で
+ローカル参加者の状態を publish する既存の場所)から送るようにした。`autorun`は
+会議中の変更用として残し、同じ値を再送しないようにした。
+コミット`binaural-meet` `e376e18`。
+
+**動作確認**: 設定を保存→リロード(=起動時にストレージから復元される状態)→入室、
+以降**設定に一切触れず**に`sttResult`(ja)を送り、翻訳が届いて字幕が英語に
+なることを確認(`logs/stt-translate-onjoin.png`)。モデルの無いko→enは
+応答から省略され原文のまま残ることも同時に確認。ページエラーなし。
+
 ## 2026-09-24 — サイドカーとの契約を実機確認、`lang=auto`のバグを修正 {#2026-09-24-stt-sidecar-contract}
 
 `stt-hostwork-sidecars`で用意されたサイドカーに対して、BM側のコードが本当に

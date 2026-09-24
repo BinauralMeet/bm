@@ -206,6 +206,13 @@ for-in で自動登録するので、中継だけならサーバーのコード�
 `PARTICIPANT_STT_LANG` を Stored にするのは、後から入室した人にも各参加者の希望言語が
 届くようにするため。サーバーはこれを翻訳先集合の計算に使う。
 
+**送るのは`DataSync.sendAllAboutMe()`**(接続時と`REQUEST_ALL`/`REQUEST_TO`で
+ローカル参加者の状態をまとめて publish する場所)。設定変更を監視する`autorun`だけに
+任せてはいけない: 字幕言語はlocalStorageから**入室前に**復元されるので、戻ってきた
+利用者は設定を一度も変更せず、接続状態はobservableでないため`autorun`は再実行されない。
+結果として誰も翻訳先言語を申告せず、翻訳が一度も走らなくなる
+(`CHANGELOG#2026-09-24-stt-lang-on-join`)。
+
 ```ts
 export interface SpeechText{ sid:string, text:string, lang:string, ts:number }
 export interface SpeechInterim{ sid:string, text:string, lang:string }
