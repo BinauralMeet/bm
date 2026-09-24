@@ -50,6 +50,15 @@ start_one portfwd "$BM/bmMediasoupServer" bash portfwd-renew.sh
 #  TLS is terminated by the sandbox reverse proxy).
 start_one main "$BM/bmMediasoupServer" npx ts-node-dev --respawn --inspect=8228 -- src/main.ts
 
+#  The speech-to-text backends that sit behind lm.haselab.net authenticate with the shared key
+#  (`config.js`'s `stt.backends[].apiKeyEnv`). It lives in a file, not the environment, so without
+#  this the media server would send unauthenticated requests, get rejected, and quietly fall
+#  through to the next backend -- looking like the GPU was busy. Absent file: nothing to do, the
+#  local sidecars need no key.
+if [ -r /opt/lm-tool/lm-tool.env ]; then
+  set -a; . /opt/lm-tool/lm-tool.env; set +a
+fi
+
 #  mediasoup. package.json's `media` script is Windows-only (`set VAR=x&...`), so invoke
 #  ts-node-dev directly. NODE_TLS_REJECT_UNAUTHORIZED is not needed while main is plain HTTP.
 start_one media "$BM/bmMediasoupServer" npx ts-node-dev --respawn --inspect=8229 -- src/media.ts
