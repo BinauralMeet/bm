@@ -5,6 +5,26 @@
 
 日付が付く記録はここに。現在形の事実は各 topic README へ。
 
+## 2026-09-24 — STT・翻訳字幕の設計を新設(サーバー側認識に決定) {#2026-09-24-stt-translation-design}
+
+BMに音声認識と翻訳を付けたいという要望から、3リポジトリに跨る設計を
+`stt-translation` として新設した(実装はまだ無い)。
+
+最初の案はChromeのWeb Speech APIをクライアントで使うものだった。このホストには
+GPUが無く(16コアCPUのみ)、GPU機(rtx4090/rtx5070ti)は`lm-tool`の排他切り替え+
+ロック制で会議中ずっとは押さえられないため、「無料・ローカル」の条件下では
+CPUのWhisper smallよりWeb Speech APIの方が日本語の精度・遅延とも上、という判断だった。
+**ユーザーの指示でサーバー側認識に変更**: Web Speech APIは`MediaStreamTrack`を
+受け取れずOS既定のマイクを掴むため、BMで別デバイスを選んでいるとSTTだけ違う音を
+聞く問題があり、これが回避不能だったのが決め手(`stt-translation#design`)。
+rtx5070tiをバックエンドに使ってよい、という方針もここで決まった。
+
+サーバー側認識の経路は`bmMediasoupServer-rtsp-streaming`のPlainTransport+ffmpegを
+流用する。GPUの扱いもユーザーの指示で決めた: **ロックは取らず、塞がっていれば
+諦めてCPUへ縮退する**(`stt-translation#fallback`)。会議は長く、その間GPUを
+占有したくないため。ホスト側で用意が要るもの(認識・翻訳サービスのHTTPパス等)は
+`stt-translation#hostwork` に集約した — 別途設定する。
+
 ## 2026-08-05 — bmMediasoupServer/vrcssにもdocsを新設 {#2026-08-05-bmms-vrcss-docs-added}
 
 残っていた2リポジトリにも`docs/bin`(doc-tool)を導入し、実コードを読んで
