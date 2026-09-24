@@ -5,6 +5,30 @@
 
 日付が付く記録はここに。現在形の事実は各 topic README へ。
 
+## 2026-09-24 — 実サイドカーで検証、残るはコンテナ内の`ffmpeg`だけ {#2026-09-24-stt-ffmpeg-container}
+
+`stt-sidecar-docker0-expose`でサイドカーがコンテナから届くようになったので、モックを外して
+**実物**に対してBM側のコードを通した。
+
+**実サイドカーで確認できたこと**:
+
+- `sttBackendLive.ts http://172.17.0.1:8190/asr`: `lang=auto`ではパラメータを送らず
+  whisperの自動判定結果(`en`)が返る、`lang=ja`ではヒントが渡り`ja`が返る。
+  **`lang=auto`修正(`#2026-09-24-stt-sidecar-contract`)が実物に対しても正しい**ことを確認。
+  1秒の音声で1.2〜2.4秒かかる(CPU、faster-whisper small)。
+- `translationLive.ts http://172.17.0.1:8191/translate`: 「これは翻訳のテストです。」→
+  "This is a translation test."。同一文の2回目はキャッシュから1ms、ko→enは応答から省略、
+  全員同じ言語の部屋では1回も呼ばない。
+- CDP実機: 設定を保存→リロード→入室(以降設定に触れない)→`sttResult`(ja)を注入すると、
+  **実翻訳がチャット欄と字幕に出る**。ページエラーなし。
+
+**残った1点**: `ffmpeg`はホストには入っているが、**sandboxコンテナの中には無い**。
+`media.ts`はコンテナ内で動くので、開発チェックアウトでは音声取り出しが動かない。
+STTを有効にして実機で追ったところ、サーバーは要求を**受理**し(クライアントへの拒否なし)、
+PlainTransport+Consumerまで作った上で`sttFFmpeg::error [error: spawn ffmpeg ENOENT]`で
+失敗し、セッションを畳んで通話には影響しなかった——**欠けているのはffmpegだけ**と確定。
+コンテナへの入れ方の選択肢は`stt-translation#todo`の1にまとめた。
+
 ## 2026-09-24 — 翻訳が一度も走らないバグを修正(字幕言語を入室時に通知していなかった) {#2026-09-24-stt-lang-on-join}
 
 headful Chromeを再起動してもらいCDP確認を再開したところ、**翻訳が1件も走らない**ことが
@@ -239,3 +263,34 @@ ja→en/en→jaとも自然な訳文を返すことを確認。`systemctl restar
 `sensevoice`モードに切り替える必要があり、BMは自分ではモード切り替えをしない設計
 (`stt-translation#fallback`)なので、他の用途(確認時点は`hidream`が使用中)を止めてまで
 試していない。`cd bmMediasoupServer && npx vitest run`(既存40件)は無変更で全通過。
+
+## 2026-09-24 — STTサイドカーをコンテナから到達可能にし、`config.js`を`localhost`から切り替え {#stt-sidecar-docker0-expose}
+
+`stt-translation#hostwork`の残作業のうち「サイドカーをコンテナから届くようにする、または
+開発中は使わないと決める」(判断が要ると明記されていた項目)、ユーザーに確認の上、
+届くようにする方を選んだ。
+
+**やったこと**:
+
+- `bm/stt-sidecars/cpu_whisper_server.py`・`translate_server.py`: `waitress.serve(host=
+  '127.0.0.1', ...)` を `serve(listen='127.0.0.1:PORT 172.17.0.1:PORT', ...)` に変更
+  (waitress 3.0.2は`listen=`でスペース区切りの複数`host:port`を受け付ける)。`172.17.0.1`は
+  docker0のホスト側アドレスで、ヘッドフルChromeのCDPプロキシと同じ経路
+  (`headful-chrome#security`)。
+- `ufw allow in on docker0 to any port 8190 proto tcp` / 同 `8191`(このホストの
+  既存パターン、`CHANGELOG-001#chrome-per-user`・`CHANGELOG-002#portfwd`と同じ形)。
+  公開インターフェースには開けず、docker0経由(=このホストの全sandboxコンテナ)限定。
+- `bmMediasoupServer/config.js`: `stt.backends[1].endpoint`と`translation.endpoint`を
+  `http://localhost:8190(8191)/...` から `http://172.17.0.1:8190(8191)/...` に変更。
+  この開発チェックアウトは`start-dev.sh`によりsandboxコンテナ内で動くため、`localhost`では
+  コンテナ自身を指してしまいホストのサイドカーに届かなかった(`172.17.0.1`はホストからも
+  コンテナからも同じアドレスとして機能するため両対応)。
+- 両systemdユニットを`systemctl restart`。
+
+**動作確認**: `systemctl is-active`で両ユニットが`active`、`ss -ltnp`で`127.0.0.1`と
+`172.17.0.1`の両方でLISTENしていることを確認。`docker exec devbox-hase curl
+http://172.17.0.1:8190/health`・`:8191/health`がともに200(コンテナ内からの到達を実機確認)。
+
+**トレードオフ**(ユーザー確認済み): この2ポートは認証が無いため、同ホストの全sandbox
+コンテナ(全ユーザー)から無認証で叩ける状態になった。詳細・受け入れた理由は
+`bm/stt-sidecars/README.md`「Known limits」。

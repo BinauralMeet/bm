@@ -321,13 +321,14 @@ UIはフッターのマイクボタン隣にSTTボタン(ON/OFFと、話す言�
 
 | # | やること | BMが何を期待するか / 確認方法 |
 |---|---|---|
-| 1 | **`ffmpeg` を入れる**(`media.ts` を動かすマシン。このコンテナには入っておらず、rootも無いので中からは入れられない) | `PATH` から `ffmpeg` が起動できること。`ffmpeg -version`。これが無いと `sttStart` はffmpegのspawnで失敗し、**音声取り出しが一切動かない**。RTSP配信(`bmMediasoupServer-rtsp-streaming`)も同じ前提なので、本番機には既に入っている可能性が高い — まず確認するだけでよい |
-| 2 | **サイドカーをコンテナから届くようにする、または「開発中は使わない」と決める** | コンテナ内から `curl http://172.17.0.1:8190/health` と `:8191/health` が200を返すこと。現状は両方ともホストの`127.0.0.1`でのみ待受けており、コンテナからは`127.0.0.1`も`172.17.0.1`も接続不可。**判断が要る**: docker0のアドレス(`172.17.0.1`)にも待受けさせれば届く(headful ChromeのCDPが同じ方法でコンテナに見えている)が、**同じホストの全コンテナ=全sandboxユーザーに無認証で開く**ことになる。開発中はサイドカーを使わない(=モックで済ませる)という選択も十分あり得る |
-| 3 | **本番配置で `LM_HASELAB_API_KEY` を環境変数に入れる** | `stt.backends[].apiKeyEnv` が指す環境変数が設定されていること。キーはホストの`/opt/lm-tool/lm-tool.env`にあるが環境変数としては入っていない。未設定だと`lm.haselab.net`側へ無認証で投げて弾かれ、**「GPUが塞がっている」のと区別の付かない失敗**になる。開発用は`start-dev.sh`が起動前に読み込むようにした |
-| 4 | **`sensevoice` の疎通を一度確認する**(任意) | rtx5070tiを`sensevoice`モードにできるタイミングで、`npx ts-node src/MediaServer/__tests__/sttBackendLive.ts https://lm.haselab.net/SENSEVOICE/asr https://lm.haselab.net/SWITCH5070TI`(`#ops`)。BMは自分ではモードを切り替えない(`#fallback`)ので、**他の用途を止めてまで急ぐ必要はない**。放置しても`cpuWhisper`へ落ちるだけ |
+| 1 | **sandboxコンテナの中にも `ffmpeg` を入れる** | コンテナ内で `ffmpeg -version` が通ること。ホストに入れてもコンテナからは見えない: bind mountされているのは`/usr/local/share/doc`・`/opt/{lm-tool,gdrive-tool,codewhale-shared}`・`$HOME`(`/home/hase/sandhome`)と`/etc`の数ファイルだけで、`/usr/bin`はイメージのもの。`media.ts`はこのコンテナ内で動く(`dev-environment#ops`)ため、**開発チェックアウトでは音声取り出しが動かない**(実機で`spawn ffmpeg ENOENT`を確認、`CHANGELOG#2026-09-24-stt-ffmpeg-container`)。選択肢: (a) devsandboxイメージに`apt-get install ffmpeg`を足して作り直す — 恒久的で全コンテナに効き、RTSP配信も同じ依存なので本筋。(b) 動作中のコンテナに`docker exec -u root ... apt-get install -y ffmpeg` — 即時だが作り直しで消える。(c) staticビルドを`$HOME/bin`に置きPATHに足す — root不要、`$HOME`はホスト側bind mountなので作り直しでも残る |
+| 2 | **本番配置で `LM_HASELAB_API_KEY` を環境変数に入れる** | `stt.backends[].apiKeyEnv` が指す環境変数が設定されていること。キーはホストの`/opt/lm-tool/lm-tool.env`にあるが環境変数としては入っていない。未設定だと`lm.haselab.net`側へ無認証で投げて弾かれ、**「GPUが塞がっている」のと区別の付かない失敗**になる。開発用は`start-dev.sh`が起動前に読み込むようにした。本番配置(`/root/webapp/bmMediasoupServer`)にはまだsystemdユニットが無く、現時点では対応不要 |
+| 3 | **`sensevoice` の疎通を一度確認する**(任意) | rtx5070tiを`sensevoice`モードにできるタイミングで、`npx ts-node src/MediaServer/__tests__/sttBackendLive.ts https://lm.haselab.net/SENSEVOICE/asr https://lm.haselab.net/SWITCH5070TI`(`#ops`)。BMは自分ではモードを切り替えない(`#fallback`)ので、**他の用途を止めてまで急ぐ必要はない**。放置しても`cpuWhisper`へ落ちるだけ |
 
-1と2が揃えば、このワークスペースから音声→字幕を一本で通した確認ができる。
-1だけでも、本番機(ホスト上で動く配置)なら通る。
+サイドカーのコンテナ到達性は済んだ(`#done`、`CHANGELOG#stt-sidecar-docker0-expose`)。
+**残るのは1だけ**で、それが入ればこのワークスペースから音声→字幕を一本で通した確認ができる。
+BM側は他が全て実機で通っており、STTを有効にするとサーバーはセッションを起動して
+ffmpegのspawnだけで失敗する(`CHANGELOG#2026-09-24-stt-ffmpeg-container`)。
 
 ### 済んでいるもの {#done}
 
@@ -336,10 +337,12 @@ UIはフッターのマイクボタン隣にSTTボタン(ON/OFFと、話す言�
 
 | # | 用意したもの | 状態 |
 |---|---|---|
-| 1 | 認識サービスへのHTTPパス(rtx5070tiのSenseVoice、マシン上のport 8189) | **既に用意されていた**。`lm.haselab.net`の`/SENSEVOICE/`(`lm-tool#arch`のGPU切り替え対象、BMとは別の目的で先に公開済み)がそのまま使える(`config.js`の`stt.backends[0].endpoint`は`https://lm.haselab.net/SENSEVOICE/asr`)。疎通は未確認(上の作業4) |
+| 1 | 認識サービスへのHTTPパス(rtx5070tiのSenseVoice、マシン上のport 8189) | **既に用意されていた**。`lm.haselab.net`の`/SENSEVOICE/`(`lm-tool#arch`のGPU切り替え対象、BMとは別の目的で先に公開済み)がそのまま使える(`config.js`の`stt.backends[0].endpoint`は`https://lm.haselab.net/SENSEVOICE/asr`)。疎通は未確認(`#todo`の2) |
 | 2 | 上記パスのロック状態の読み取り | **既に用意されていた**。`https://lm.haselab.net/SWITCH5070TI/lock/status`が実機確認済み(`GET`→`{"locked":false}`、2026-09-24) |
-| 3 | 翻訳サービス(CTranslate2 + FuguMT)のHTTPパス | 新設。`bm/stt-sidecars`(別リポジトリ、bmワークスペースの兄弟ディレクトリ)が`http://localhost:8191/translate`をこのホストのCPUで提供、systemd管理。ja→en/en→jaで実機確認済み。詳細・なぜHelsinki-NLPのen->jap系を採らずFuguMTにしたかは`bm/stt-sidecars/README.md` |
-| 4 | 縮退用の `cpuWhisper` サイドカー(faster-whisper small、CPU) | 新設。同じく`bm/stt-sidecars`が`http://localhost:8190/asr`で提供、systemd管理。実音声で実機確認済み |
+| 3 | 翻訳サービス(CTranslate2 + FuguMT)のHTTPパス | 新設。`bm/stt-sidecars`(別リポジトリ、bmワークスペースの兄弟ディレクトリ)が`8191/translate`をこのホストのCPUで提供、systemd管理。ja→en/en→jaで実機確認済み。詳細・なぜHelsinki-NLPのen->jap系を採らずFuguMTにしたかは`bm/stt-sidecars/README.md` |
+| 4 | 縮退用の `cpuWhisper` サイドカー(faster-whisper small、CPU) | 新設。同じく`bm/stt-sidecars`が`8190/asr`で提供、systemd管理。実音声で実機確認済み |
+| 5 | `ffmpeg`(**ホスト側のみ**) | ホストには導入済み(`ffmpeg -version`、5.1.9)。ただし**sandboxコンテナの中にはまだ無い** — 下の`#todo`の1を参照 |
+| 6 | サイドカーのコンテナからの到達性 | 両サイドカーを`127.0.0.1`に加え`172.17.0.1`(docker0)にも待受けさせ、`ufw allow in on docker0 to any port 8190/8191 proto tcp`で範囲を同ホストのコンテナ限定に絞って開放。`config.js`の両エンドポイントも`localhost`→`172.17.0.1`に更新。コンテナ内(`docker exec devbox-hase curl http://172.17.0.1:8190(/8191)/health`)から200を実機確認済み(`CHANGELOG#stt-sidecar-docker0-expose`)。**認証なしで同ホストの全sandboxコンテナから到達可能になったことは受け入れたトレードオフ**(`bm/stt-sidecars/README.md#known-limits`) |
 
 BM側はどれも「エンドポイントURLを `config.js` に書くだけ」で繋がる形にしてあり、
 サービスの実装・配置・認証方式には依存しない。
