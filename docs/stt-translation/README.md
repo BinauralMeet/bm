@@ -340,15 +340,19 @@ UIはフッターのマイクボタン隣にSTTボタン(ON/OFFと、話す言�
 
 ### 残っているホスト作業 {#todo}
 
-どちらも今すぐ必要なものではない。
+**本番(`vrc-jp#files`のmediaサーバー)で字幕を動かすのに要るもの。** 開発チェックアウトは
+SSHトンネルで動いているが、本番からは`lm.haselab.net`を経由するしかない。
 
 | # | やること | BMが何を期待するか / 確認方法 |
 |---|---|---|
-| 1 | **本番配置で `LM_HASELAB_API_KEY` を環境変数に入れる** | `stt.backends[].apiKeyEnv` が指す環境変数が設定されていること。キーはホストの`/opt/lm-tool/lm-tool.env`にあるが環境変数としては入っていない。未設定だと`lm.haselab.net`側へ無認証で投げて弾かれ、**「GPUが塞がっている」のと区別の付かない失敗**になる。開発用は`start-dev.sh`が起動前に読み込むようにした。本番配置(`/root/webapp/bmMediasoupServer`)にはまだsystemdユニットが無く、現時点では対応不要 |
-| 2 | **`gpuWhisper`をホスト常設にする**(任意) | 今は`start-dev.sh`がSSHトンネルを張る開発用の経路。本番のmediaサーバーから使うなら、同じトンネルをsystemd等で常設にするか、rtx5070tiにプロキシパスを生やす |
+| 1 | **`lm.haselab.net` に GPU認識へのパスを生やす**(例 `/GPUWHISPER/` → `192.168.91.101:8192`、rtx5070ti) | **WebSocketではなく素のHTTP**(POST 1往復)なので、`/SENSEVOICE`と同じ形のリバースプロキシで足りる。BMが叩くのは `POST <base>/asr?lang=<ヒント>`(bodyは16kHz mono WAVの生バイト、`Content-Type: audio/wav`)→ `{"text":..., "lang":...}`、それに `GET <base>/health`。認証は他パスと同じAPIキー(BMは`Authorization: Bearer $LM_HASELAB_API_KEY`を送る)。**2点だけ設定注意**: リクエストボディが最大約1MB(30秒の発話)なので上限をそれ以上に、読み取りタイムアウトをBM側の20秒より長く。確認は `curl -H "Authorization: Bearer <key>" https://lm.haselab.net/GPUWHISPER/health` が200 |
+| 2 | **本番mediaサーバーに `ffmpeg`** | `media.ts`が動くマシンで`ffmpeg -version`が通ること。無いと`sttStart`がspawnで失敗し音声取り出しが動かない。RTSP配信(`bmMediasoupServer-rtsp-streaming`)と同じ依存なので既に入っている可能性が高い |
+| 3 | **本番の `config.js` に `stt`/`translation` を書く** | このリポジトリのテンプレートはコメント例のみ(サンドボックス固有の値を混ぜないため)。1が済んだら `stt.backends[0].endpoint` を `https://lm.haselab.net/GPUWHISPER/asr` にする(開発チェックアウトの`127.0.0.1:8192`はSSHトンネル用) |
+| 4 | **本番プロセスに `LM_HASELAB_API_KEY`** | `stt.backends[].apiKeyEnv`が指す環境変数。キーはホストの`/opt/lm-tool/lm-tool.env`にあるが環境変数としては入っていない。未設定だと無認証で弾かれ、**「GPUが塞がっている」のと区別の付かない失敗**になる。pm2なら`ecosystem`の`env`、開発用は`start-dev.sh`が読み込む |
+| 5 | **(任意)`lm-tool`のヘルプとdocを更新** | rtx5070tiに`gpuwhisper`モードが増えたので、`activate-hidream`の「stops sensevoice/irodori」等の記述が古い。パッチは受け渡し済み(`CHANGELOG#2026-09-25-stt-gpuwhisper-deployed`) |
 
-**字幕は今の構成(`gpuWhisper` + `cpuWhisper`)で動いている**。上の2点はどちらも
-今すぐ必要なものではない。
+1が済むまでは、本番では`stt.backends`から`gpuWhisper`を外して`cpuWhisper`だけで動かせる
+(字幕は出る。精度と速度が落ちるだけ)。
 
 ### 済んでいるもの {#done}
 
@@ -362,7 +366,7 @@ UIはフッターのマイクボタン隣にSTTボタン(ON/OFFと、話す言�
 | 3 | 翻訳サービス(CTranslate2 + FuguMT)のHTTPパス | 新設。`bm/stt-sidecars`(別リポジトリ、bmワークスペースの兄弟ディレクトリ)が`8191/translate`をこのホストのCPUで提供、systemd管理。ja→en/en→jaで実機確認済み。詳細・なぜHelsinki-NLPのen->jap系を採らずFuguMTにしたかは`bm/stt-sidecars/README.md` |
 | 4 | 縮退用の `cpuWhisper` サイドカー(faster-whisper small、CPU) | 新設。同じく`bm/stt-sidecars`が`8190/asr`で提供、systemd管理。実音声で実機確認済み |
 | 5 | `ffmpeg` | ホスト・sandboxコンテナの両方に導入済み(5.1.9)。コンテナ内でも`ffmpeg -version`が通り、実際に音声取り出しが動作した |
-| 6 | `gpuWhisper`(rtx5070ti) | 配備済み。`C:\Home\work\gpuwhisper\`に専用venv、`control_api.py`に`gpuwhisper`モードを追加(`hidream`/`sensevoice`/`irodori`と同じ扱い、`WHISPER_PROMPT`もそこで渡す)。**プロキシパスは追加できないため、`start-dev.sh`がSSHトンネル(127.0.0.1:8192)を張る**。Windows特有のCUDA DLL問題とcuBLASのバージョン固定は`bm/stt-sidecars/README.md#gpu` |
+| 6 | `gpuWhisper`(rtx5070ti、`192.168.91.101:8192`) | 配備済み。`C:\Home\work\gpuwhisper\`に専用venv、`control_api.py`に`gpuwhisper`モードを追加(`hidream`/`sensevoice`/`irodori`と同じ扱い、`WHISPER_PROMPT`もそこで渡す)。待受は`sensevoice`(8189)と同じく`0.0.0.0`——**プロキシは別マシンにあるのでループバックのままでは公開できない**。開発チェックアウトは`start-dev.sh`のSSHトンネル経由、本番は`#todo`の1で生やすパス経由。Windows特有のCUDA DLL問題とcuBLASのバージョン固定は`bm/stt-sidecars/README.md#gpu` |
 | 7 | サイドカーのコンテナからの到達性 | 両サイドカーを`127.0.0.1`に加え`172.17.0.1`(docker0)にも待受けさせ、`ufw allow in on docker0 to any port 8190/8191 proto tcp`で範囲を同ホストのコンテナ限定に絞って開放。`config.js`の両エンドポイントも`localhost`→`172.17.0.1`に更新。コンテナ内(`docker exec devbox-hase curl http://172.17.0.1:8190(/8191)/health`)から200を実機確認済み(`CHANGELOG#stt-sidecar-docker0-expose`)。**認証なしで同ホストの全sandboxコンテナから到達可能になったことは受け入れたトレードオフ**(`bm/stt-sidecars/README.md#known-limits`) |
 
 BM側はどれも「エンドポイントURLを `config.js` に書くだけ」で繋がる形にしてあり、
