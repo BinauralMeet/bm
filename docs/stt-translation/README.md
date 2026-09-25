@@ -4,10 +4,10 @@
 `DataServer`の翻訳ハンドラに触る / 字幕が出ない・訳文が来ない原因を切り分ける /
 STTエンジンや翻訳バックエンドを差し替える / rtx5070tiをBMの認識バックエンドとして使う
 
-BM側は実装済み(2026-09-24)。ただし**音声を取り出す部分だけは未検証** —
-このコンテナに`ffmpeg`が無く、サイドカーにも届かないため。**残っているのはホスト側の
-作業だけで、`#hostwork` にまとめてある**。
-決定に至る経緯と却下した案は `#design`、何がどこまで通っているかは `#phases`。
+実装済み・**実機で音声から字幕まで一本通してある**(2026-09-25、
+`CHANGELOG#2026-09-25-stt-e2e`)。既定ではオフで、`config.js`にバックエンドを
+書いた環境でだけ動く。決定に至る経緯と却下した案は `#design`、
+何がどこまで通っているかは `#phases`。
 
 ## 構成 {#arch}
 
@@ -294,21 +294,16 @@ UIはフッターのマイクボタン隣にSTTボタン(ON/OFFと、話す言�
 
 | 部分 | 状態 |
 |---|---|
-| 音声取り出し(PlainTransport + ffmpeg + VAD + 再認識ループ) | 実装済み・**未検証**。`ffmpeg`がこのコンテナに無く動かせない |
-| 認識バックエンドの選択とフォールバック | 実装済み。ロジックは単体テスト済み。**BMのHTTPクライアント自体**(WAVの組み立て・`lang`・応答の解釈)は、サイドカーと同じ契約を実装したモックに対して実機確認済み(`#ops`)。実サイドカーとの疎通はコンテナから届かないため未確認、`sensevoice`も未確認(`#hostwork`) |
+| 音声取り出し(PlainTransport + ffmpeg + VAD + 再認識ループ) | 実装済み・**実機確認済み**(実音声→字幕) |
+| 認識バックエンドの選択とフォールバック | 実装済み。ロジックは単体テスト、`cpuWhisper`は実機確認済み。`sensevoice`への疎通のみ未確認(`#hostwork`)だが、**GPUからCPUへの縮退が実運用で働くことは確認済み** |
 | 認識結果の注入・配信(`sttIngest`) | 実装済み・実機確認済み |
 | `Transcript`ストア・吹き出し・チャット欄・設定UI | 実装済み・実機確認済み |
-| 翻訳(`translation.ts`) | 実装済み。翻訳先集合とキャッシュは単体テスト済み。`translation.ts`自体(希望言語の収集・キャッシュ・リクエストの形・未対応ペアの扱い)もモックに対して実機確認済み(`#ops`)。実サイドカーとの疎通は未確認(同上) |
+| 翻訳(`translation.ts`) | 実装済み・実機確認済み(en→ja、ja→en) |
 | Recorder/Playerへの登録 | 実装済み(`recordable`・`onPlayback`)・未検証 |
 | テキスト/VTT書き出し | **未実装** |
 
-サイドカーは4点とも揃い`config.js`に配線済み(2026-09-24、`CHANGELOG#stt-hostwork-sidecars`)。
-残っているのは:
-
-- **書き出し**(未実装。BM側の作業)。
-- **音声取り出しから字幕までを一本で通すこと**。BM側のコードは他すべて実機で通してあり、
-  ここだけは`ffmpeg`とサイドカーへの到達性が要る — **どちらもホスト側の作業で、
-  `#hostwork`の「残っているホスト作業」にまとめてある**。
+残っているのは**書き出し**(未実装)と、**Recorder/Playerでの再生時の字幕**(実装済み・未検証)。
+それ以外は実音声で一本通っている。
 
 ## ホスト側で必要な準備 {#hostwork}
 
@@ -321,14 +316,11 @@ UIはフッターのマイクボタン隣にSTTボタン(ON/OFFと、話す言�
 
 | # | やること | BMが何を期待するか / 確認方法 |
 |---|---|---|
-| 1 | **sandboxコンテナの中にも `ffmpeg` を入れる** | コンテナ内で `ffmpeg -version` が通ること。ホストに入れてもコンテナからは見えない: bind mountされているのは`/usr/local/share/doc`・`/opt/{lm-tool,gdrive-tool,codewhale-shared}`・`$HOME`(`/home/hase/sandhome`)と`/etc`の数ファイルだけで、`/usr/bin`はイメージのもの。`media.ts`はこのコンテナ内で動く(`dev-environment#ops`)ため、**開発チェックアウトでは音声取り出しが動かない**(実機で`spawn ffmpeg ENOENT`を確認、`CHANGELOG#2026-09-24-stt-ffmpeg-container`)。選択肢: (a) devsandboxイメージに`apt-get install ffmpeg`を足して作り直す — 恒久的で全コンテナに効き、RTSP配信も同じ依存なので本筋。(b) 動作中のコンテナに`docker exec -u root ... apt-get install -y ffmpeg` — 即時だが作り直しで消える。(c) staticビルドを`$HOME/bin`に置きPATHに足す — root不要、`$HOME`はホスト側bind mountなので作り直しでも残る |
-| 2 | **本番配置で `LM_HASELAB_API_KEY` を環境変数に入れる** | `stt.backends[].apiKeyEnv` が指す環境変数が設定されていること。キーはホストの`/opt/lm-tool/lm-tool.env`にあるが環境変数としては入っていない。未設定だと`lm.haselab.net`側へ無認証で投げて弾かれ、**「GPUが塞がっている」のと区別の付かない失敗**になる。開発用は`start-dev.sh`が起動前に読み込むようにした。本番配置(`/root/webapp/bmMediasoupServer`)にはまだsystemdユニットが無く、現時点では対応不要 |
-| 3 | **`sensevoice` の疎通を一度確認する**(任意) | rtx5070tiを`sensevoice`モードにできるタイミングで、`npx ts-node src/MediaServer/__tests__/sttBackendLive.ts https://lm.haselab.net/SENSEVOICE/asr https://lm.haselab.net/SWITCH5070TI`(`#ops`)。BMは自分ではモードを切り替えない(`#fallback`)ので、**他の用途を止めてまで急ぐ必要はない**。放置しても`cpuWhisper`へ落ちるだけ |
+| 1 | **本番配置で `LM_HASELAB_API_KEY` を環境変数に入れる** | `stt.backends[].apiKeyEnv` が指す環境変数が設定されていること。キーはホストの`/opt/lm-tool/lm-tool.env`にあるが環境変数としては入っていない。未設定だと`lm.haselab.net`側へ無認証で投げて弾かれ、**「GPUが塞がっている」のと区別の付かない失敗**になる。開発用は`start-dev.sh`が起動前に読み込むようにした。本番配置(`/root/webapp/bmMediasoupServer`)にはまだsystemdユニットが無く、現時点では対応不要 |
+| 2 | **`sensevoice` の疎通を一度確認する**(任意) | rtx5070tiを`sensevoice`モードにできるタイミングで、`npx ts-node src/MediaServer/__tests__/sttBackendLive.ts https://lm.haselab.net/SENSEVOICE/asr https://lm.haselab.net/SWITCH5070TI`(`#ops`)。BMは自分ではモードを切り替えない(`#fallback`)ので、**他の用途を止めてまで急ぐ必要はない**。放置しても`cpuWhisper`へ落ちるだけ — 実際の会議でもそうなっている(`CHANGELOG#2026-09-25-stt-e2e`)
 
-サイドカーのコンテナ到達性は済んだ(`#done`、`CHANGELOG#stt-sidecar-docker0-expose`)。
-**残るのは1だけ**で、それが入ればこのワークスペースから音声→字幕を一本で通した確認ができる。
-BM側は他が全て実機で通っており、STTを有効にするとサーバーはセッションを起動して
-ffmpegのspawnだけで失敗する(`CHANGELOG#2026-09-24-stt-ffmpeg-container`)。
+**ホスト側の必須作業は全て済んでいる**(`#done`)。音声→字幕は2026-09-25に実機で
+一本通した(`CHANGELOG#2026-09-25-stt-e2e`)。上の2点はどちらも今すぐ必要なものではない。
 
 ### 済んでいるもの {#done}
 
@@ -341,7 +333,7 @@ ffmpegのspawnだけで失敗する(`CHANGELOG#2026-09-24-stt-ffmpeg-container`)
 | 2 | 上記パスのロック状態の読み取り | **既に用意されていた**。`https://lm.haselab.net/SWITCH5070TI/lock/status`が実機確認済み(`GET`→`{"locked":false}`、2026-09-24) |
 | 3 | 翻訳サービス(CTranslate2 + FuguMT)のHTTPパス | 新設。`bm/stt-sidecars`(別リポジトリ、bmワークスペースの兄弟ディレクトリ)が`8191/translate`をこのホストのCPUで提供、systemd管理。ja→en/en→jaで実機確認済み。詳細・なぜHelsinki-NLPのen->jap系を採らずFuguMTにしたかは`bm/stt-sidecars/README.md` |
 | 4 | 縮退用の `cpuWhisper` サイドカー(faster-whisper small、CPU) | 新設。同じく`bm/stt-sidecars`が`8190/asr`で提供、systemd管理。実音声で実機確認済み |
-| 5 | `ffmpeg`(**ホスト側のみ**) | ホストには導入済み(`ffmpeg -version`、5.1.9)。ただし**sandboxコンテナの中にはまだ無い** — 下の`#todo`の1を参照 |
+| 5 | `ffmpeg` | ホスト・sandboxコンテナの両方に導入済み(5.1.9)。コンテナ内でも`ffmpeg -version`が通り、実際に音声取り出しが動作した |
 | 6 | サイドカーのコンテナからの到達性 | 両サイドカーを`127.0.0.1`に加え`172.17.0.1`(docker0)にも待受けさせ、`ufw allow in on docker0 to any port 8190/8191 proto tcp`で範囲を同ホストのコンテナ限定に絞って開放。`config.js`の両エンドポイントも`localhost`→`172.17.0.1`に更新。コンテナ内(`docker exec devbox-hase curl http://172.17.0.1:8190(/8191)/health`)から200を実機確認済み(`CHANGELOG#stt-sidecar-docker0-expose`)。**認証なしで同ホストの全sandboxコンテナから到達可能になったことは受け入れたトレードオフ**(`bm/stt-sidecars/README.md#known-limits`) |
 
 BM側はどれも「エンドポイントURLを `config.js` に書くだけ」で繋がる形にしてあり、
@@ -409,10 +401,15 @@ GPU1枚で捌ける同時話者数は**未計測**。Phase 1 で実測してこ�
 
 ## 既知の制限 {#limits}
 
-- **このコンテナでは音声取り出しを動かせない。** `ffmpeg`が入っておらず(rootも無い)、
-  `sttStart`はffmpegのspawnで失敗する。サイドカーにも届かない。どちらもホスト側の
-  作業なので `#hostwork` を見ること。RTSP配信(`bmMediasoupServer-rtsp-streaming`)も
-  ffmpegを前提にしているので、これはこの機能に固有の問題ではない。
+- **途中結果は、認識が発話区間より速いバックエンドでないと一度も表示されない。**
+  `cpuWhisper`(faster-whisper small、CPU)は1秒の音声に1.2〜2.4秒かかる実測で、
+  1.5秒ごとの再認識が返る頃には区間が閉じており、`segment.closed`で捨てられる。
+  30秒間400ms間隔で監視して未確定の発話は0件だった(`CHANGELOG#2026-09-25-stt-e2e`)。
+  **`interimIntervalMs`はGPUバックエンドが繋がるまで実質無効**で、字幕は確定単位で出る。
+- **VADは無音0.5秒で区間を切るので、字幕が文の途中で切れる。** `hangoverMs`を伸ばせば
+  まとまるが、そのぶん字幕が出るまでの待ちが伸びる。
+- **`ffmpeg`が要る。** `media.ts`を動かすマシン(開発ではsandboxコンテナ、本番ではホスト)の
+  両方に必要。RTSP配信(`bmMediasoupServer-rtsp-streaming`)も同じ前提。
 
 - **途中結果の遅延はブラウザ内認識より大きい。** RTP→ffmpeg→VAD→認識→DataServerの
   ポーリング配信を通るため、話者自身の字幕も往復してから出る。

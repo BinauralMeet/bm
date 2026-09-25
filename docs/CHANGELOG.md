@@ -5,6 +5,39 @@
 
 日付が付く記録はここに。現在形の事実は各 topic README へ。
 
+## 2026-09-25 — 音声から字幕まで実機で一本通した {#2026-09-25-stt-e2e}
+
+コンテナにも`ffmpeg`が入り、最後の欠落が埋まった。**実際の音声を通話に流して、字幕と
+訳文が出るところまで確認した**(これまでは`sttResult`を注入した半分だけの確認だった)。
+
+**やり方**: headful Chromeの前に話す人はいないので、ページ内でWAV(whisper.cppの
+`jfk.wav`、11秒の英語スピーチ)を`AudioContext`でループ再生して
+`MediaStreamAudioDestinationNode`のトラックを作り、`conference.setLocalMicTrack()`で
+マイクと差し替えた。`addOrReplaceLocalTrack()`は既存Producerを`replaceTrack`で使い回すので、
+サーバーが見ているProducer idは変わらない。字幕言語は`ja`、話す言語は`auto`。
+
+**結果**(英語音声 → 日本語字幕、`logs/stt-e2e-long.png`):
+
+| 認識(en) | 訳文(ja) |
+|---|---|
+| And so, my fellow Americans. | そして、私の仲間のアメリカ人。 |
+| ASK NOT! | 聞かないで! |
+| What your country can do for you! | あなたの国があなたのために何ができるか! |
+
+`media`のログで`stt: session started ... (lang auto)`→`stt: using backend 'cpuWhisper'`を確認。
+**`sensevoice`(GPU)から`cpuWhisper`への縮退が実運用で働いている**——rtx5070tiが
+`sensevoice`モードではないので、設計どおり黙って次の候補へ落ちている。
+
+**分かった制限**: **途中結果(`SPEECH_INTERIM`)が利用者には一度も見えない。**
+30秒間400ms間隔で監視しても未確定の発話は0件だった。CPUのfaster-whisper smallは
+1秒の音声に1.2〜2.4秒かかり(実測)、1.5秒ごとの再認識が返る頃には区間が閉じていて、
+`segment.closed`で捨てられるため。設計どおりの挙動ではあるが、
+**`interimIntervalMs`はGPUバックエンドが繋がるまで実質無効**。
+`stt-translation#limits`に記載した。
+
+VADは無音0.5秒で切るので、字幕は文の途中でも切れる(上表の2行目・3行目)。
+`hangoverMs`で調整できるが、長くすると字幕が出るまでの待ちが伸びる。
+
 ## 2026-09-24 — 実サイドカーで検証、残るはコンテナ内の`ffmpeg`だけ {#2026-09-24-stt-ffmpeg-container}
 
 `stt-sidecar-docker0-expose`でサイドカーがコンテナから届くようになったので、モックを外して
