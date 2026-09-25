@@ -103,11 +103,14 @@ export interface SttBackend{
 }
 ```
 
-| 実装 | 中身 | 位置付け |
+すべて同じインターフェースの上に乗る。サービスごとの差(パス・multipart/生body・言語
+パラメータ名)は`config.js`のエントリで吸収する(`upload`/`langParam`/`langAuto`)。
+
+| バックエンド | 中身 | 位置付け |
 |---|---|---|
-| `SenseVoiceBackend` | rtx5070ti上の既存SenseVoiceサービス(port 8189)へHTTP POST | 第1候補。非自己回帰で速く、日本語・英語の短発話に強い |
-| `WhisperBackend` | faster-whisper(large-v3-turbo, int8_float16)のサイドカーへHTTP POST | 句読点や長文の質を優先する場合 |
-| `CpuWhisperBackend` | 同じサイドカーをCPU・smallモデルで動かす | 縮退先。日本語の短発話では精度が明確に落ちるが、GPUが使えない間も字幕は出る |
+| `sensevoice` | rtx5070ti上の既存SenseVoiceサービス(`POST /transcribe`、multipart、`language`) | **速い**(1秒の音声を約0.1秒)。途中結果が実用になるのはこれ以上の速さが要る。**弱点はカタカナ語**——言語モデルを持たずホットワード指定もできないため、外来語・固有名詞を取り違える |
+| `gpuWhisper` | faster-whisper large-v3-turbo(CUDA)。`bm/stt-sidecars/gpu_whisper_server.py` | **語彙が強い**。`initial_prompt`でその場の用語を渡せるので、カタカナ語はこちらが本命。**未配備**——GPU機側の作業が要る(`#hostwork`) |
+| `cpuWhisper` | 同じサイドカーのCPU・smallモデル | 縮退先。1秒の音声に1.2〜2.4秒かかるので途中結果は出ないが、GPUが使えない間も字幕は出る |
 
 いずれも「PCMを投げてテキストが返る」だけのHTTPで、**media.tsから見れば同じ形**。
 
@@ -340,11 +343,12 @@ UIはフッターのマイクボタン隣にSTTボタン(ON/OFFと、話す言�
 
 | # | やること | BMが何を期待するか / 確認方法 |
 |---|---|---|
-| 1 | **本番配置で `LM_HASELAB_API_KEY` を環境変数に入れる** | `stt.backends[].apiKeyEnv` が指す環境変数が設定されていること。キーはホストの`/opt/lm-tool/lm-tool.env`にあるが環境変数としては入っていない。未設定だと`lm.haselab.net`側へ無認証で投げて弾かれ、**「GPUが塞がっている」のと区別の付かない失敗**になる。開発用は`start-dev.sh`が起動前に読み込むようにした。本番配置(`/root/webapp/bmMediasoupServer`)にはまだsystemdユニットが無く、現時点では対応不要 |
-| 2 | **`sensevoice` の疎通を一度確認する**(任意) | rtx5070tiを`sensevoice`モードにできるタイミングで、`npx ts-node src/MediaServer/__tests__/sttBackendLive.ts https://lm.haselab.net/SENSEVOICE/asr https://lm.haselab.net/SWITCH5070TI`(`#ops`)。BMは自分ではモードを切り替えない(`#fallback`)ので、**他の用途を止めてまで急ぐ必要はない**。放置しても`cpuWhisper`へ落ちるだけ — 実際の会議でもそうなっている(`CHANGELOG#2026-09-25-stt-e2e`)
+| 1 | **GPU機に `gpuWhisper` を配備する**(カタカナ語の精度を上げたい場合) | 認識サービス自体は`bm/stt-sidecars/gpu_whisper_server.py`として書いてあり、`cpuWhisper`と同じ契約なので**BM側は`stt.backends`に1エントリ足すだけ**。GPU機側で要るのは2つ: (a) そのマシンの`control_api.py`にモードを足す(`sensevoice`/`hidream`と同じ扱いにする。BMは`gpuMode`でそのモードに切り替えようとし、ロック中は触らない)、(b) `lm.haselab.net`にプロキシパスを生やす(media serverはプロキシ越しにしか届かない)。手順は`bm/stt-sidecars/README.md#gpu` |
+| 2 | **本番配置で `LM_HASELAB_API_KEY` を環境変数に入れる** | `stt.backends[].apiKeyEnv` が指す環境変数が設定されていること。キーはホストの`/opt/lm-tool/lm-tool.env`にあるが環境変数としては入っていない。未設定だと`lm.haselab.net`側へ無認証で投げて弾かれ、**「GPUが塞がっている」のと区別の付かない失敗**になる。開発用は`start-dev.sh`が起動前に読み込むようにした。本番配置(`/root/webapp/bmMediasoupServer`)にはまだsystemdユニットが無く、現時点では対応不要 |
+| 3 | **`sensevoice` の疎通を一度確認する**(任意) | rtx5070tiを`sensevoice`モードにできるタイミングで、`npx ts-node src/MediaServer/__tests__/sttBackendLive.ts https://lm.haselab.net/SENSEVOICE/asr https://lm.haselab.net/SWITCH5070TI`(`#ops`)。BMは自分ではモードを切り替えない(`#fallback`)ので、**他の用途を止めてまで急ぐ必要はない**。放置しても`cpuWhisper`へ落ちるだけ — 実際の会議でもそうなっている(`CHANGELOG#2026-09-25-stt-e2e`)
 
-**ホスト側の必須作業は全て済んでいる**(`#done`)。音声→字幕は2026-09-25に実機で
-一本通した(`CHANGELOG#2026-09-25-stt-e2e`)。上の2点はどちらも今すぐ必要なものではない。
+**字幕は今の構成(`sensevoice` + `cpuWhisper`)で動いている**。上の1は「カタカナ語の
+精度を上げたい」ときの作業で、無くても字幕は出る。2・3は今すぐ必要なものではない。
 
 ### 済んでいるもの {#done}
 
