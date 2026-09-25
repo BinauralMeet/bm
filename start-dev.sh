@@ -35,7 +35,7 @@ start_one(){  #  $1 = name, $2 = workdir, rest = command
 
 case "${1:-start}" in
   stop)
-    for n in client media main portfwd; do stop_one "$n"; done
+    for n in client media main portfwd gputunnel; do stop_one "$n"; done
     exit 0
     ;;
   start) ;;
@@ -49,6 +49,18 @@ start_one portfwd "$BM/bmMediasoupServer" bash portfwd-renew.sh
 #  Gateway for the media servers. Listens on 3100 (plain HTTP, useHttp: true in config.js --
 #  TLS is terminated by the sandbox reverse proxy).
 start_one main "$BM/bmMediasoupServer" npx ts-node-dev --respawn --inspect=8228 -- src/main.ts
+
+#  The GPU recognizer runs on rtx5070ti, which has no reverse-proxy path of its own (unlike
+#  /SENSEVOICE), so the only way in is an SSH tunnel. Without it the media server's first STT
+#  backend simply fails and the next one answers -- the call still works, the transcript is just
+#  worse -- so a missing SSH key is a warning, not a failure.
+if [ -r /opt/aigw-ssh/config ]; then
+  start_one gputunnel "$BM" ssh -F /opt/aigw-ssh/config -o BatchMode=yes \
+    -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes \
+    -N -L 127.0.0.1:8192:127.0.0.1:8192 rtx5070ti
+else
+  echo "no /opt/aigw-ssh/config: skipping the GPU recognizer tunnel (STT falls back to CPU)"
+fi
 
 #  The speech-to-text backends that sit behind lm.haselab.net authenticate with the shared key
 #  (`config.js`'s `stt.backends[].apiKeyEnv`). It lives in a file, not the environment, so without

@@ -108,11 +108,12 @@ export interface SttBackend{
 
 | バックエンド | 中身 | 位置付け |
 |---|---|---|
-| `sensevoice` | rtx5070ti上の既存SenseVoiceサービス(`POST /transcribe`、multipart、`language`) | **速い**(1秒の音声を約0.1秒)。途中結果が実用になるのはこれ以上の速さが要る。**弱点はカタカナ語**——言語モデルを持たずホットワード指定もできないため、外来語・固有名詞を取り違える |
-| `gpuWhisper` | faster-whisper large-v3-turbo(CUDA)。`bm/stt-sidecars/gpu_whisper_server.py` | **語彙が強い**。`initial_prompt`でその場の用語を渡せるので、カタカナ語はこちらが本命。**未配備**——GPU機側の作業が要る(`#hostwork`) |
-| `cpuWhisper` | 同じサイドカーのCPU・smallモデル | 縮退先。1秒の音声に1.2〜2.4秒かかるので途中結果は出ないが、GPUが使えない間も字幕は出る |
+| `gpuWhisper` | rtx5070ti上のfaster-whisper large-v3-turbo(CUDA)。`bm/stt-sidecars/gpu_whisper_server.py`、`control_api.py`の`gpuwhisper`モード | **第1候補。** 11秒の音声を約0.3秒(実測)、句読点付きの文として返る。`WHISPER_PROMPT`でその場の用語(カタカナ語)を渡せる。**プロキシパスが無いのでSSHトンネル経由**(`start-dev.sh`が開く) |
+| `cpuWhisper` | このホストのCPU・faster-whisper small | 縮退先。1秒の音声に1.2〜2.4秒かかるので途中結果は出ないが、GPUが使えない間も字幕は出る |
+| `sensevoice` | 同じrtx5070ti上の既存SenseVoice(`POST /transcribe`、multipart、`language`) | 速さは同等(11秒を約0.4秒)だが、**言語モデルを持たずホットワード指定もできないためカタカナ語に弱く**、文が断片化する。`gpuWhisper`を入れた今は使っていない(`config.js`にコメントで残してある) |
 
-いずれも「PCMを投げてテキストが返る」だけのHTTPで、**media.tsから見れば同じ形**。
+**同じGPU上の複数バックエンドに`gpuMode`を設定してはいけない。** 互いに自分のモードへ
+切り替え合って、発話ごとにGPUを取り合う。優先する1つにだけ付ける。
 
 ### バックエンドの選択とフォールバック {#fallback}
 
@@ -339,16 +340,15 @@ UIはフッターのマイクボタン隣にSTTボタン(ON/OFFと、話す言�
 
 ### 残っているホスト作業 {#todo}
 
-上から順に、詰まり具合の大きい順。**1が無いと音声認識はどこでも動かない。**
+どちらも今すぐ必要なものではない。
 
 | # | やること | BMが何を期待するか / 確認方法 |
 |---|---|---|
-| 1 | **GPU機に `gpuWhisper` を配備する**(カタカナ語の精度を上げたい場合) | 認識サービス自体は`bm/stt-sidecars/gpu_whisper_server.py`として書いてあり、`cpuWhisper`と同じ契約なので**BM側は`stt.backends`に1エントリ足すだけ**。GPU機側で要るのは2つ: (a) そのマシンの`control_api.py`にモードを足す(`sensevoice`/`hidream`と同じ扱いにする。BMは`gpuMode`でそのモードに切り替えようとし、ロック中は触らない)、(b) `lm.haselab.net`にプロキシパスを生やす(media serverはプロキシ越しにしか届かない)。手順は`bm/stt-sidecars/README.md#gpu` |
-| 2 | **本番配置で `LM_HASELAB_API_KEY` を環境変数に入れる** | `stt.backends[].apiKeyEnv` が指す環境変数が設定されていること。キーはホストの`/opt/lm-tool/lm-tool.env`にあるが環境変数としては入っていない。未設定だと`lm.haselab.net`側へ無認証で投げて弾かれ、**「GPUが塞がっている」のと区別の付かない失敗**になる。開発用は`start-dev.sh`が起動前に読み込むようにした。本番配置(`/root/webapp/bmMediasoupServer`)にはまだsystemdユニットが無く、現時点では対応不要 |
-| 3 | **`sensevoice` の疎通を一度確認する**(任意) | rtx5070tiを`sensevoice`モードにできるタイミングで、`npx ts-node src/MediaServer/__tests__/sttBackendLive.ts https://lm.haselab.net/SENSEVOICE/asr https://lm.haselab.net/SWITCH5070TI`(`#ops`)。BMは自分ではモードを切り替えない(`#fallback`)ので、**他の用途を止めてまで急ぐ必要はない**。放置しても`cpuWhisper`へ落ちるだけ — 実際の会議でもそうなっている(`CHANGELOG#2026-09-25-stt-e2e`)
+| 1 | **本番配置で `LM_HASELAB_API_KEY` を環境変数に入れる** | `stt.backends[].apiKeyEnv` が指す環境変数が設定されていること。キーはホストの`/opt/lm-tool/lm-tool.env`にあるが環境変数としては入っていない。未設定だと`lm.haselab.net`側へ無認証で投げて弾かれ、**「GPUが塞がっている」のと区別の付かない失敗**になる。開発用は`start-dev.sh`が起動前に読み込むようにした。本番配置(`/root/webapp/bmMediasoupServer`)にはまだsystemdユニットが無く、現時点では対応不要 |
+| 2 | **`gpuWhisper`をホスト常設にする**(任意) | 今は`start-dev.sh`がSSHトンネルを張る開発用の経路。本番のmediaサーバーから使うなら、同じトンネルをsystemd等で常設にするか、rtx5070tiにプロキシパスを生やす |
 
-**字幕は今の構成(`sensevoice` + `cpuWhisper`)で動いている**。上の1は「カタカナ語の
-精度を上げたい」ときの作業で、無くても字幕は出る。2・3は今すぐ必要なものではない。
+**字幕は今の構成(`gpuWhisper` + `cpuWhisper`)で動いている**。上の2点はどちらも
+今すぐ必要なものではない。
 
 ### 済んでいるもの {#done}
 
@@ -362,7 +362,8 @@ UIはフッターのマイクボタン隣にSTTボタン(ON/OFFと、話す言�
 | 3 | 翻訳サービス(CTranslate2 + FuguMT)のHTTPパス | 新設。`bm/stt-sidecars`(別リポジトリ、bmワークスペースの兄弟ディレクトリ)が`8191/translate`をこのホストのCPUで提供、systemd管理。ja→en/en→jaで実機確認済み。詳細・なぜHelsinki-NLPのen->jap系を採らずFuguMTにしたかは`bm/stt-sidecars/README.md` |
 | 4 | 縮退用の `cpuWhisper` サイドカー(faster-whisper small、CPU) | 新設。同じく`bm/stt-sidecars`が`8190/asr`で提供、systemd管理。実音声で実機確認済み |
 | 5 | `ffmpeg` | ホスト・sandboxコンテナの両方に導入済み(5.1.9)。コンテナ内でも`ffmpeg -version`が通り、実際に音声取り出しが動作した |
-| 6 | サイドカーのコンテナからの到達性 | 両サイドカーを`127.0.0.1`に加え`172.17.0.1`(docker0)にも待受けさせ、`ufw allow in on docker0 to any port 8190/8191 proto tcp`で範囲を同ホストのコンテナ限定に絞って開放。`config.js`の両エンドポイントも`localhost`→`172.17.0.1`に更新。コンテナ内(`docker exec devbox-hase curl http://172.17.0.1:8190(/8191)/health`)から200を実機確認済み(`CHANGELOG#stt-sidecar-docker0-expose`)。**認証なしで同ホストの全sandboxコンテナから到達可能になったことは受け入れたトレードオフ**(`bm/stt-sidecars/README.md#known-limits`) |
+| 6 | `gpuWhisper`(rtx5070ti) | 配備済み。`C:\Home\work\gpuwhisper\`に専用venv、`control_api.py`に`gpuwhisper`モードを追加(`hidream`/`sensevoice`/`irodori`と同じ扱い、`WHISPER_PROMPT`もそこで渡す)。**プロキシパスは追加できないため、`start-dev.sh`がSSHトンネル(127.0.0.1:8192)を張る**。Windows特有のCUDA DLL問題とcuBLASのバージョン固定は`bm/stt-sidecars/README.md#gpu` |
+| 7 | サイドカーのコンテナからの到達性 | 両サイドカーを`127.0.0.1`に加え`172.17.0.1`(docker0)にも待受けさせ、`ufw allow in on docker0 to any port 8190/8191 proto tcp`で範囲を同ホストのコンテナ限定に絞って開放。`config.js`の両エンドポイントも`localhost`→`172.17.0.1`に更新。コンテナ内(`docker exec devbox-hase curl http://172.17.0.1:8190(/8191)/health`)から200を実機確認済み(`CHANGELOG#stt-sidecar-docker0-expose`)。**認証なしで同ホストの全sandboxコンテナから到達可能になったことは受け入れたトレードオフ**(`bm/stt-sidecars/README.md#known-limits`) |
 
 BM側はどれも「エンドポイントURLを `config.js` に書くだけ」で繋がる形にしてあり、
 サービスの実装・配置・認証方式には依存しない。

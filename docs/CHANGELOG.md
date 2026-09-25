@@ -40,6 +40,39 @@ SenseVoiceが混ぜてくるイベント絵文字(🎼など)も除去するよ�
 **結果**: SenseVoice経由で1秒の音声を82〜124ms(CPUの1.2〜2.4秒から10〜30倍速)、
 字幕は発話の約2秒後、**途中結果も初めて表示されるようになった**。
 
+## 2026-09-25 — GPU版Whisperをrtx5070tiに配備、カタカナ語対策 {#2026-09-25-stt-gpuwhisper-deployed}
+
+「STTの語彙が足りない、カタカナ語がだめ」への対応。ユーザーから「プロキシパスは追加
+できないがsshはできるので、5070ti側の修正はやってほしい」という指示があり、GPU機に
+直接入って配備した。作業中は`lm-tool lock --machine rtx5070ti`でロックを取得
+(BM本体はロックを取らない設計だが、これは保守作業なのでロックが正しい使い方)。
+
+**rtx5070ti側(`C:\Home\work\gpuwhisper\`)**:
+
+- 専用venv + `faster-whisper` large-v3-turbo(CUDA fp16)。スクリプトは
+  `bm/stt-sidecars/gpu_whisper_server.py`と同一。
+- `control_api.py`に`gpuwhisper`モードを追加(`hidream`/`sensevoice`/`irodori`と同じ扱い、
+  `hidream`とだけ排他)。`WHISPER_PROMPT`(カタカナ語の用語リスト)と
+  `WHISPER_HOST=127.0.0.1`もここで渡す。編集前に`.bak-<日時>`を作成。
+- **ハマった点2つ**(`bm/stt-sidecars/README.md#gpu`に記録):
+  (1) Windowsでは`nvidia-*-cu12`ホイールが置く`cublas64_12.dll`をCTranslate2が見つけられない。
+  `os.add_dll_directory()`だけでは不十分で、**PATHにも足す**必要がある(素の名前でロードするため)。
+  (2) cuBLAS 12.9ホイールだと**推論中にプロセスごとクラッシュ**し、リクエストが無反応のまま
+  ぶら下がる。`nvidia-cublas-cu12==12.8.*`(このマシンのtorch cu128に合わせる)で安定。
+
+**経路**: rtx5070tiにはプロキシパスが無いので(ユーザーが追加できないとのこと)、
+`start-dev.sh`が**SSHトンネル**(`127.0.0.1:8192`)を張るようにした。鍵が無い環境では
+警告だけ出して起動を続ける(その場合は`cpuWhisper`へ落ちる)。
+
+**実測**: 11秒の音声を約0.3秒。SenseVoiceが断片(「ASK NOT!」「What your country can do」)
+だったのに対し、**句読点付きの1文**("And so, my fellow Americans, ask not what your country
+can do for you, ask what you can do for your country.")として返る。BMからのend-to-endでも
+`using backend 'gpuWhisper'`・**途中結果あり**・訳文ありを確認。
+
+`config.js`の`stt.backends`は`gpuWhisper`→`cpuWhisper`の順にした。SenseVoiceはコメントで
+残してある。**同じGPU上の複数バックエンドに`gpuMode`を設定してはいけない**(互いに自分の
+モードへ切り替え合う)ことも設定コメントに書いた。
+
 ## 2026-09-25 — カタカナ語対策としてGPU版Whisperのサイドカーを用意 {#2026-09-25-stt-gpu-whisper}
 
 「STTの語彙が足りない、特にカタカナ語がだめ」という指摘。SenseVoice-smallは高速だが
