@@ -87,8 +87,17 @@ GPUサイドカー(`gpu_whisper_server.py`)に多言語モデルの`/translate`�
 指示だったが、**BinauralMeetは公開サービスなのでNCライセンスはサービス全体に付いて回る**
 と判断し、既定をM2Mにした。ja↔enは引き続きFuguMT(どちらより良い)。
 
-**未配備**: GPU機でのモデル変換がまだ。それまで`/translate`は503を返すだけで、
-現状の動作は変わらない。
+**配備完了(同日)**: rtx5070tiで`facebook/m2m100_418M`をCTranslate2へ変換
+(`C:\Home\work\gpuwhisper\models\m2m100-418m`、float16)。変換用のtorchはCPUホイールを
+入れて終了後に削除、実行時に要るのは`transformers`+`sentencepiece`のみ。
+`control_api.py`が`MULTI_MODEL`/`MULTI_KIND`を渡す。
+
+`translation.ts`は**エンドポイントの配列**を順に試し、各エンドポイントには**まだ
+埋まっていない言語だけ**を聞くようにした。ja↔enはFuguMT(CPU)、zh/koはGPUのM2M-100。
+
+**動作確認**: 直接叩いて ja→zh/ko/en・en→ja/zh が正しく返ることを確認
+(「これは翻訳のテストです。」→「这是翻译的测试。」「이것은 번역 테스트입니다.」)。
+BMからのend-to-endでも、英語音声→**中国語字幕**が途中結果付きで出ることを確認。
 
 ## 2026-09-25 — GPU版Whisperをrtx5070tiに配備、カタカナ語対策 {#2026-09-25-stt-gpuwhisper-deployed}
 
@@ -496,3 +505,64 @@ http://172.17.0.1:8190/health`・`:8191/health`がともに200(コンテナ内�
 **トレードオフ**(ユーザー確認済み): この2ポートは認証が無いため、同ホストの全sandbox
 コンテナ(全ユーザー)から無認証で叩ける状態になった。詳細・受け入れた理由は
 `bm/stt-sidecars/README.md`「Known limits」。
+
+## 2026-09-26 — ai4にfaster-whisper `medium`を追加、CPUフォールバックを2段構成に {#ai4-cpu-whisper-medium}
+
+ユーザーから: 「ai1と同じ構成のPCがあと3台ある、活用できれば」「CPUでもう少し大きなSTT
+モデルを動かせるか、動かせるならai4を使えるようにしてほしい」。ai1自体はメモリが逼迫
+していて(swap使い切り、`earlyoom`がベンチ中のプロセスを実際にSIGTERM)大きいモデルを
+乗せる余地が無いことを実機で確認、一方ai4は同一ハードウェア(i7-11800H)で
+ほぼ無負荷(コンテナ無し、空きメモリ12GB超)だったため、ai4に専用の
+`cpuWhisper`(faster-whisper `medium`)を立てて`stt.backends`に追加した。
+
+**ベンチマーク**(`jfk.wav`、11秒、int8):
+
+| モデル | マシン | スレッド数 | 実時間比 |
+|---|---|---|---|
+| small | ai1 | 4 | 0.24倍 |
+| medium | ai4 | 8 | **0.45倍(採用)** |
+| medium | ai4 | 16(HT込み) | 0.70倍(HTまで使うとむしろ悪化) |
+| large-v3 | ai4 | 16 | 1.07倍(ほぼリアルタイム限界、今回は見送り) |
+
+`medium`・8スレッド(物理コア数)を採用。smallより明確に精度が上がり、まだ実時間の
+2倍以上速い。
+
+**やったこと**:
+
+- ai4: `python3-venv`導入、`/opt/stt-sidecars/{venv,hf-cache}`(`hase`所有)を作り
+  `bm/stt-sidecars/cpu_whisper_server.py`をそのまま配置(コード変更なし、環境変数
+  だけで`medium`を選択)。`stt-cpu-whisper.service`(`CPU_WHISPER_MODEL=medium`・
+  `CPU_WHISPER_THREADS=8`)をsystemdで常駐、`127.0.0.1`・`172.17.0.1`双方で待受け
+  (ai4自体はdocker0を使わないため後者は実質無害)。
+- **ai1→ai4の到達経路はSSHトンネルのみ**(ai4のufwにはこのポート用の穴を一切開けて
+  いない)。ai1の`root`に新しい専用鍵ペア(`id_ed25519_ai4-stt-tunnel`)を作り、
+  ai4の`hase`アカウントの`authorized_keys`に
+  `command="/bin/echo restricted: port-forwarding only",restrict,port-forwarding,
+  permitopen="127.0.0.1:8190"`付きで登録——ポートフォワード以外(シェル実行・
+  他ポートへの転送)は一切できない。**注意点**: `restrict,port-forwarding`だけでは
+  対話シェルだけが防げず`ssh host cmd`のような非対話コマンド実行は素通りしてしまう
+  ことに気づき、`command=`で強制コマンドを追加して塞いだ(実機で`ssh ... whoami`が
+  素通りすることを確認してから修正、修正後は強制コマンドの出力だけが返ることを確認)。
+  `permitopen`で指定ポート以外への転送も実際に中身が届かない(TCP接続はローカルで
+  受け付けるが相手からのバイトが来ない)ことを実機確認。
+- ai1: `ai4-stt-tunnel.service`(systemd、`Restart=always`)が`ssh -N`で
+  `127.0.0.1:8193`・`172.17.0.1:8193`をai4の`127.0.0.1:8190`へ転送。
+  `ufw allow in on docker0 to any port 8193 proto tcp`(このホストの既存パターン、
+  `CHANGELOG-002#portfwd`等と同じ形)。
+- `bmMediasoupServer/config.js`: `stt.backends`に`{kind:'cpuWhisper',
+  endpoint:'http://172.17.0.1:8193/asr'}`を追加。並び順は
+  `gpuWhisper`(GPU、最優先)→ ai4の`cpuWhisper`(medium、この行)→
+  ローカルの`cpuWhisper`(small、常時利用可能な最終フォールバック)。**この並び順
+  自体が挙動を決める**(先に見つかった到達可能なものが使われるため、smallを先に
+  書くと常時到達可能なsmallが常に勝ってしまいmediumが使われなくなる)。
+
+**動作確認**: `docker exec devbox-hase curl http://172.17.0.1:8193/health`が200、
+同じくコンテナ内から`POST /asr`(`jfk.wav`)で正しい書き起こしを確認。
+`node -e "require('config.js')"`で構文確認。既存の`cpuWhisper`(small)・
+`translate`との共存(ポート番号の衝突)が無いことも確認済み——`config.js`には
+並行して別セッションが`gpuWhisper`用に`127.0.0.1:8192`のトンネルを追加していたため、
+ai4用のポートは最初8192で作ってしまい衝突に気づいて8193に変更した経緯あり。
+
+**現在残っているもの**: ai2・ai3(ai4と同じ「予備機」)は未使用のまま。同じ手順で
+複製可能。本番(`vrc-jp`)側の`stt.backends`にこの構成を含めるかは別判断
+(`#hostwork`の`#todo`は現状GPU経路の生やし方のみを扱っている)。

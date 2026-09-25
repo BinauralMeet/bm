@@ -183,14 +183,23 @@ stt: {
 4. `SPEECH_TRANSLATION` を部屋の全員へ配る。`instantMessageHandler` と違い
    **話者自身にも送る**(話者の字幕表示言語が自分の発話言語と違うことがあるため)。
 
-翻訳バックエンドも `TranslationBackend`(`translate(texts, src, dsts)`)で抽象化する。
+翻訳バックエンドは**優先順に並べた`translation.endpoints`**で、各エンドポイントには
+**まだ埋まっていない言語だけ**を聞く。1つのモデルで全部を賄うより、得意なものを前に置く方が
+質が上がるため: ja↔enは専用モデルのFuguMTが多言語モデルより明確に良く、FuguMTが知らない
+zh/koはその後ろの多言語モデルが答える。落ちているエンドポイントは、それしか出せない言語だけを
+失わせる。
 
-| 候補 | 品質(ja↔en) | 遅延の目安 | 備考 |
-|---|---|---|---|
-| **CTranslate2 + opus-mt(推奨)** | 実用十分 | CPUで数百ms | 小さく、**CPUで完結**するのでGPU争奪と無関係。常時動かせる。Helsinki-NLPのモデルはCC-BY 4.0 |
-| CTranslate2 + NLLB-200-distilled-600M | opus-mtより良い | CPUで1秒前後 | **CC-BY-NC(非商用)**。用途によっては使えない |
-| ローカルLLM(`lm-tool`経由) | 最良。前後の発話を文脈として渡せる | 1〜3秒 + GPU待ち | GPUが他用途と排他。常用は不可、「高品質モード」として選択式に |
-| LibreTranslate | 上記より劣る | 1秒前後 | dockerで立つのが利点。予備 |
+| 実装 | 担当 | 備考 |
+|---|---|---|
+| FuguMT(CTranslate2、CPU) | **ja↔en** | `bm/stt-sidecars/translate_server.py`。このホストのCPUで常時動く |
+| M2M-100 418M(CTranslate2、GPU) | **上記以外**(zh/ko等) | `gpu_whisper_server.py`の`/translate`。認識と同じプロセス・同じモード・同じ経路 |
+
+**M2M-100(MIT)を既定にした理由**: NLLB-200の方が訳は良いが**CC-BY-NC(非商用)**で、
+BinauralMeetは公開サービスなので**ライセンスがサービス全体に付いて回る**。
+`MULTI_KIND=nllb`で切り替えられるようにはしてある。
+
+翻訳を認識と同じプロセスに同居させたのは、モデルが認識器に比べて小さく、同じGPU・同じモード・
+同じ経路に乗るため。GPUを取られれば両方止まるが、その時はCPU側のFuguMTがja↔enを拾う。
 
 翻訳先言語の集合計算は `DataServer/TranslationTargets.ts` に純粋関数として切り出す。
 
@@ -326,12 +335,12 @@ UIはフッターのマイクボタン隣にSTTボタン(ON/OFFと、話す言�
 | 認識バックエンドの選択とフォールバック | 実装済み。ロジックは単体テスト、`cpuWhisper`は実機確認済み。`sensevoice`への疎通のみ未確認(`#hostwork`)だが、**GPUからCPUへの縮退が実運用で働くことは確認済み** |
 | 認識結果の注入・配信(`sttIngest`) | 実装済み・実機確認済み |
 | `Transcript`ストア・吹き出し・チャット欄・設定UI | 実装済み・実機確認済み |
-| 翻訳(`translation.ts`) | 実装済み・実機確認済み(en→ja、ja→en) |
+| 翻訳(`translation.ts`) | 実装済み・実機確認済み。ja↔enはFuguMT(CPU)、zh/koはGPUのM2M-100(2026-09-25にen→zhを実機確認) |
 | Recorder/Playerへの登録 | 実装済み(`recordable`・`onPlayback`)・未検証 |
 | テキスト/VTT書き出し | **未実装** |
 
 残っているのは**書き出し**(未実装)と、**Recorder/Playerでの再生時の字幕**(実装済み・未検証)。
-それ以外は実音声で一本通っている。
+それ以外は実音声で一本通っている。本番で動かすのに要るホスト作業は`#todo`。
 
 ## ホスト側で必要な準備 {#hostwork}
 
@@ -345,11 +354,10 @@ SSHトンネルで動いているが、本番からは`lm.haselab.net`を経由�
 
 | # | やること | BMが何を期待するか / 確認方法 |
 |---|---|---|
-| 1 | **`lm.haselab.net` に GPU認識へのパスを生やす**(例 `/GPUWHISPER/` → `192.168.91.101:8192`、rtx5070ti) | **WebSocketではなく素のHTTP**(POST 1往復)なので、`/SENSEVOICE`と同じ形のリバースプロキシで足りる。BMが叩くのは `POST <base>/asr?lang=<ヒント>`(bodyは16kHz mono WAVの生バイト、`Content-Type: audio/wav`)→ `{"text":..., "lang":...}`、それに `GET <base>/health`。認証は他パスと同じAPIキー(BMは`Authorization: Bearer $LM_HASELAB_API_KEY`を送る)。**2点だけ設定注意**: リクエストボディが最大約1MB(30秒の発話)なので上限をそれ以上に、読み取りタイムアウトをBM側の20秒より長く。確認は `curl -H "Authorization: Bearer <key>" https://lm.haselab.net/GPUWHISPER/health` が200 |
+| 1 | **`lm.haselab.net` に GPU認識へのパスを生やす**(例 `/GPUWHISPER/` → `192.168.91.101:8192`、rtx5070ti) | **WebSocketではなく素のHTTP**(POST 1往復)なので、`/SENSEVOICE`と同じ形のリバースプロキシで足りる。BMが叩くのは `POST <base>/asr?lang=<ヒント>`(bodyは16kHz mono WAVの生バイト、`Content-Type: audio/wav`)→ `{"text":..., "lang":...}`、**同じパス配下の `POST <base>/translate`**(JSON `{texts,src,dsts}` → 言語→訳文)、それに `GET <base>/health`。**認識と翻訳は同じサービス(8192)なので、パスを1つ通せば両方通る。**認証は他パスと同じAPIキー(BMは`Authorization: Bearer $LM_HASELAB_API_KEY`を送る)。**2点だけ設定注意**: リクエストボディが最大約1MB(30秒の発話)なので上限をそれ以上に、読み取りタイムアウトをBM側の20秒より長く。確認は `curl -H "Authorization: Bearer <key>" https://lm.haselab.net/GPUWHISPER/health` が200 |
 | 2 | **本番mediaサーバーに `ffmpeg`** | `media.ts`が動くマシンで`ffmpeg -version`が通ること。無いと`sttStart`がspawnで失敗し音声取り出しが動かない。RTSP配信(`bmMediasoupServer-rtsp-streaming`)と同じ依存なので既に入っている可能性が高い |
 | 3 | **本番の `config.js` に `stt`/`translation` を書く** | このリポジトリのテンプレートはコメント例のみ(サンドボックス固有の値を混ぜないため)。1が済んだら `stt.backends[0].endpoint` を `https://lm.haselab.net/GPUWHISPER/asr` にする(開発チェックアウトの`127.0.0.1:8192`はSSHトンネル用) |
 | 4 | **本番プロセスに `LM_HASELAB_API_KEY`** | `stt.backends[].apiKeyEnv`が指す環境変数。キーはホストの`/opt/lm-tool/lm-tool.env`にあるが環境変数としては入っていない。未設定だと無認証で弾かれ、**「GPUが塞がっている」のと区別の付かない失敗**になる。pm2なら`ecosystem`の`env`、開発用は`start-dev.sh`が読み込む |
-| 5 | **(任意)`lm-tool`のヘルプとdocを更新** | rtx5070tiに`gpuwhisper`モードが増えたので、`activate-hidream`の「stops sensevoice/irodori」等の記述が古い。パッチは受け渡し済み(`CHANGELOG#2026-09-25-stt-gpuwhisper-deployed`) |
 
 1が済むまでは、本番では`stt.backends`から`gpuWhisper`を外して`cpuWhisper`だけで動かせる
 (字幕は出る。精度と速度が落ちるだけ)。
@@ -368,6 +376,8 @@ SSHトンネルで動いているが、本番からは`lm.haselab.net`を経由�
 | 5 | `ffmpeg` | ホスト・sandboxコンテナの両方に導入済み(5.1.9)。コンテナ内でも`ffmpeg -version`が通り、実際に音声取り出しが動作した |
 | 6 | `gpuWhisper`(rtx5070ti、`192.168.91.101:8192`) | 配備済み。`C:\Home\work\gpuwhisper\`に専用venv、`control_api.py`に`gpuwhisper`モードを追加(`hidream`/`sensevoice`/`irodori`と同じ扱い、`WHISPER_PROMPT`もそこで渡す)。待受は`sensevoice`(8189)と同じく`0.0.0.0`——**プロキシは別マシンにあるのでループバックのままでは公開できない**。開発チェックアウトは`start-dev.sh`のSSHトンネル経由、本番は`#todo`の1で生やすパス経由。Windows特有のCUDA DLL問題とcuBLASのバージョン固定は`bm/stt-sidecars/README.md#gpu` |
 | 7 | サイドカーのコンテナからの到達性 | 両サイドカーを`127.0.0.1`に加え`172.17.0.1`(docker0)にも待受けさせ、`ufw allow in on docker0 to any port 8190/8191 proto tcp`で範囲を同ホストのコンテナ限定に絞って開放。`config.js`の両エンドポイントも`localhost`→`172.17.0.1`に更新。コンテナ内(`docker exec devbox-hase curl http://172.17.0.1:8190(/8191)/health`)から200を実機確認済み(`CHANGELOG#stt-sidecar-docker0-expose`)。**認証なしで同ホストの全sandboxコンテナから到達可能になったことは受け入れたトレードオフ**(`bm/stt-sidecars/README.md#known-limits`) |
+| 8 | ai4に`cpuWhisper`(faster-whisper medium)を追加、CPU3段構成に | ai1と同一構成の予備機ai4(ほぼ無負荷)に`bm/stt-sidecars`一式を配備、`stt-cpu-whisper.service`を`CPU_WHISPER_MODEL=medium`で起動。ai1→ai4はポートフォワード専用に制限した専用SSH鍵(`permitopen`でai4のループバックのみ)を使う`ai4-stt-tunnel.service`(ai1側systemd常駐)経由、`config.js`は`172.17.0.1:8193`。`stt.backends`内の順序は`gpuWhisper` → ai4の`cpuWhisper`(medium、この行) → ローカルの`cpuWhisper`(small、常時利用可能な最終フォールバック)。11秒の音声で実時間比0.45倍(smallは0.24倍)、実機確認済み(`CHANGELOG#ai4-cpu-whisper-medium`) |
+| 9 | `lm-tool`のヘルプ更新(`gpuwhisper`モード分) | コンテナ内で用意されていたパッチ(`activate-hidream`等の「stops sensevoice/irodori」表記に`gpuwhisper`を追加、`activate-gpuwhisper`サブコマンド新設)を、ホスト側`root`が`/opt/lm-tool/lm_tool.py`に適用(コンテナからは書き込めない共有ファイルのため)。適用前に`patch --dry-run`・適用後に構文チェックと`lm-tool activate-gpuwhisper --help`で実機確認済み(2026-09-26) |
 
 BM側はどれも「エンドポイントURLを `config.js` に書くだけ」で繋がる形にしてあり、
 サービスの実装・配置・認証方式には依存しない。
