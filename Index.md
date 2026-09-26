@@ -37,7 +37,7 @@ dev-environment                            sandboxでの開発・動作確認  [
                                                反映されない / mediasoup の音声・映像が繋がらない / `skipEntrance`
                                                を使ったのに 入室しない / headful debug Chrome が起動しない /
                                                アバター一覧が空になる
-stt-translation                            サーバー側音声認識と翻訳字幕  [554L]
+stt-translation                            サーバー側音声認識と翻訳字幕  [558L]
                                              → 発話の文字起こし・翻訳字幕機能を実装する / `MediaServer`のSTTセッションや
                                                `DataServer`の翻訳ハンドラに触る /
                                                字幕が出ない・訳文が来ない原因を切り分ける /
@@ -57,6 +57,6 @@ ForHuman                                   doc ツールの説明（人間向け
                                              → doc ツールが何なのか知りたい / 全コマンドを知りたい / 規約がその形である
                                                理由を知りたい / 消した内容を git から戻したい（Claude
                                                は通常不要。書くときの規約は `rules` に全部ある）
-CHANGELOG                                  bm/ ワークスペースの変更履歴  [579L]
+CHANGELOG                                  bm/ ワークスペースの変更履歴  [592L]
                                              → いつ・なぜ今の状態になったか調べる / 過去の動作確認の記録を探す /
                                                変更を加えたので追記する
