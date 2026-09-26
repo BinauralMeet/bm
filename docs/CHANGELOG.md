@@ -51,6 +51,19 @@ promptはデコーダの文脈そのものなので、日本語の語彙リス�
 明示的に送るので、日本語の会議では2発話目以降に効く。修正後、英語は "Ask not!" に戻り、
 中国語字幕も出ることを確認。
 
+## 2026-09-26 — 本番構成(main + media1 + media2 + binaural.me)に合わせて作業を分けた {#2026-09-26-stt-prod-topology}
+
+本番は`main`・`media1`・`media2`・`binaural.me`(クライアント配信)という構成。
+**この機能はmainとmediaの両方に跨っているので、マシンによって要るものが違う**:
+
+- `media1`/`media2`: 音声を取り出して認識するので**`ffmpeg`**と`stt`ブロックとAPIキー
+- `main`: 認識結果を部屋へ配って翻訳を呼ぶので`translation`ブロックとAPIキー(**ffmpegは不要**)
+- `binaural.me`: 新しいクライアントビルド(無いとSTTのUI自体が無い)
+
+`maxSessions`はワーカーごとなので、media2台で合計16。一方**GPUサービスは全ワーカーで
+共有**され、同時に捌ける本数は`WHISPER_WORKERS`(既定2)。両mediaから同時に喋る人が
+増えると待ち行列ができる。
+
 ## 2026-09-26 — 本番の所在を訂正(vrc.jpではなくtitech) {#2026-09-26-stt-prod-target}
 
 `stt-translation#todo`を「本番はこのホスト上のvrc.jp(pm2)」という前提で書いていたが、

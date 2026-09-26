@@ -349,27 +349,31 @@ UIはフッターのマイクボタン隣にSTTボタン(ON/OFFと、話す言�
 
 ### 残っているホスト作業 {#todo}
 
-**本番は`main.titech.binaural.me`等の別マシン**(このワークスペースのdev環境とも、
-`vrc-jp`のvrc.jpとも別)。ここが効いてくる:
+**本番は `main` + `media1` + `media2` + `binaural.me`(クライアント配信)**という構成で、
+このワークスペースのdev環境とも`vrc-jp`のvrc.jpとも別マシン。
 
-- **CPUサイドカー(8190/8191)はこのホストにしか無く、本番からは届かない。**
-  ループバック待受で認証も無いので、そのまま公開するものでもない。
-- rtx5070tiのGPUサービスは`lm.haselab.net`経由なら本番からも届く(公開HTTPS)。
-  **認識と翻訳が同じサービス(8192)なので、パスを1本通せば両方賄える。**
+**役割ごとに要るものが違う**——この機能はmainとmediaの両方に跨っているため:
 
-つまり本番の最小構成は「GPUパス1本 + APIキー + ffmpeg」。CPU側は**本番マシンに
-別途入れるかどうかの選択**になる(下の表の5)。
-
-| # | やること | 確認方法 |
+| マシン | 何をする | 要るもの |
 |---|---|---|
-| 1 | **`lm.haselab.net` にGPUサービスへのパス**(例 `/GPUWHISPER/` → `192.168.91.101:8192`) | `curl -H "Authorization: Bearer <key>" https://lm.haselab.net/GPUWHISPER/health` が `{"model":"large-v3-turbo",...,"translator":"m2m100"}`。**素のHTTP**(POST 1往復)でよく、WebSocketは使わない。ボディ上限は1MB以上、読み取りタイムアウトは20秒より長く |
-| 2 | **本番マシンに `ffmpeg`** | `media`が動くマシンで`ffmpeg -version`。無いと`sttStart`がspawnで失敗し、**音声取り出しが一切動かない**(通話は無事)。RTSP配信と同じ依存 |
-| 3 | **本番マシンに `LM_HASELAB_API_KEY`** | キーはこのホストの`/opt/lm-tool/lm-tool.env`にある。本番マシンのプロセス環境に入れる。未設定だと無認証で弾かれ、**「GPUが塞がっている」のと区別の付かない失敗**になる |
-| 4 | **本番リポジトリを`feature/stt-translation`にしてビルド・配置** | サーバー(`bmMediasoupServer`)とクライアント(`binaural-meet`)の両方。**クライアントを配り忘れるとSTTのUI自体が無い**。`config.js`は本番固有の値が入っているのでpullで上書きせず、`stt`/`translation`ブロックだけ足す |
-| 5 | **(選択)本番マシンにもCPUサイドカーを置く** | `bm/stt-sidecars`をそのマシンで動かす(CPUのみ、GPU不要)。**入れると**: GPUが塞がっている間も字幕が出る、ja↔enの訳がFuguMTになり質が上がる。**入れないと**: GPUが使えない時間は字幕が出ず、ja↔enもM2M-100が訳す |
-| 6 | (任意)`lm-tool`のヘルプとdocを更新 | rtx5070tiに`gpuwhisper`モードが増えた。パッチは受け渡し済み |
+| `media1` / `media2` | 音声を取り出して認識する(`stt.ts`) | **`ffmpeg`**、`config.js`の**`stt`ブロック**、`LM_HASELAB_API_KEY` |
+| `main` | 認識結果を部屋へ配り、翻訳を呼ぶ(`sttIngest`/`translation.ts`) | `config.js`の**`translation`ブロック**、`LM_HASELAB_API_KEY`。**ffmpegは不要** |
+| `binaural.me` | クライアントを配る | 新しいビルド(**これが無いとSTTのUI自体が無い**) |
 
-本番の`config.js`(5を入れない場合。入れるなら`cpuWhisper`とFuguMTの行を足す):
+CPUサイドカー(8190/8191)はこのホストのループバックにしか無く、本番のどのマシンからも
+届かない。GPUサービスは`lm.haselab.net`経由なら届き、**認識と翻訳が同じサービス(8192)
+なのでパスを1本通せばmediaもmainも賄える**。
+
+| # | やること | どこに | 確認方法 |
+|---|---|---|---|
+| 1 | **`lm.haselab.net` にGPUサービスへのパス**(例 `/GPUWHISPER/` → `192.168.91.101:8192`) | プロキシ | `curl -H "Authorization: Bearer <key>" .../GPUWHISPER/health` が `{"model":"large-v3-turbo",...,"translator":"m2m100"}`。**素のHTTP**(POST 1往復、WebSocketではない)。ボディ上限1MB以上、読み取りタイムアウト20秒超 |
+| 2 | **`ffmpeg`** | media1, media2 | `ffmpeg -version`。無いと`sttStart`がspawnで失敗し字幕が一切出ない(通話は無事)。RTSP配信と同じ依存 |
+| 3 | **`LM_HASELAB_API_KEY`** | media1, media2, main | キーはこのホストの`/opt/lm-tool/lm-tool.env`。未設定だと無認証で弾かれ、**「GPUが塞がっている」のと区別の付かない失敗**になる |
+| 4 | **`feature/stt-translation`をビルド・配置** | 全マシン + binaural.me | `config.js`は各マシン固有の値が入っているのでpullで上書きせず、該当ブロックだけ足す |
+| 5 | **(選択)CPUサイドカーを本番にも置く** | media*(認識)、main(翻訳) | `bm/stt-sidecars`はCPUのみでGPU不要。**入れると**GPUが塞がっている間も字幕が出て、ja↔enの訳がFuguMTになり質が上がる。**入れないと**その時間は字幕が止まり、ja↔enもM2M-100が訳す |
+| 6 | (任意)`lm-tool`のヘルプとdocを更新 | このホスト | rtx5070tiに`gpuwhisper`モードが増えた。パッチは受け渡し済み |
+
+`media1`/`media2`の`config.js`:
 
 ```js
 stt: {
@@ -378,8 +382,14 @@ stt: {
       gpuStatus: 'https://lm.haselab.net/SWITCH5070TI', gpuMode: 'gpuwhisper',
       apiKeyEnv: 'LM_HASELAB_API_KEY', timeoutMs: 20000},
   ],
-  maxSessions: 8, interimIntervalMs: 900, hangoverMs: 600,
+  maxSessions: 8,           //  ワーカーごと。media1とmedia2で合計16
+  interimIntervalMs: 900, hangoverMs: 600,
 },
+```
+
+`main`の`config.js`:
+
+```js
 translation: {
   endpoints: [
     {endpoint: 'https://lm.haselab.net/GPUWHISPER/translate',
@@ -389,8 +399,12 @@ translation: {
 },
 ```
 
-**途中で止めても壊れない**: 1が未了なら`stt.backends`を空にしておけば、STTを有効にした
-クライアントに拒否が返るだけ。2が未了だと字幕は一切出ないが通話には影響しない。
+**GPUサービスは全ワーカーで共有される。** `WHISPER_WORKERS`(既定2)が同時に捌ける本数なので、
+media1とmedia2で同時に喋る人が増えると待ち行列ができる。増やすときはVRAMと相談
+(large-v3-turbo fp16が1本あたり約1.5GB)。
+
+**途中で止めても壊れない**: 1が未了なら`stt.backends`を空のままにしておけば、STTを
+有効にしたクライアントに拒否が返るだけ。通話・共有コンテンツには一切影響しない。
 
 **本番で動き出すと、GPUが空いているときにBMが自分でrtx5070tiを`gpuwhisper`モードへ
 切り替える**(=ComfyUIが止まる)。ロックを取っている間は手を出さない(`#fallback`)。
