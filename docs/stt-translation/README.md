@@ -375,14 +375,17 @@ CPUサイドカー(8190/8191)はこのホストのループバックにしか無
 届かない。GPUサービスは`lm.haselab.net`経由なら届き、**認識と翻訳が同じサービス(8192)
 なのでパスを1本通せばmediaもmainも賄える**。
 
+**1・2(`lm.haselab.net`のGPUパス・`ffmpeg`)は済んだ(`#done`の10・11)。** 残るのは
+コードのデプロイに関わる3点――**2026-09-26、ユーザー判断で保留中**: 3台とも
+`main`ブランチの互いに異なるコミットで止まっており(`feature/stt-translation`は
+未マージ)、いつ・どう追従するかは別途指示を待つ。config.js自体は`main`に
+マージ後、以下のブロックを足すだけで足りる想定。
+
 | # | やること | どこに | 確認方法 |
 |---|---|---|---|
-| 1 | **`lm.haselab.net` にGPUサービスへのパス**(例 `/GPUWHISPER/` → `192.168.91.101:8192`) | プロキシ | `curl -H "Authorization: Bearer <key>" .../GPUWHISPER/health` が `{"model":"large-v3-turbo",...,"translator":"m2m100"}`。**素のHTTP**(POST 1往復、WebSocketではない)。ボディ上限1MB以上、読み取りタイムアウト20秒超 |
-| 2 | **`ffmpeg`** | media1, media2 | `ffmpeg -version`。無いと`sttStart`がspawnで失敗し字幕が一切出ない(通話は無事)。RTSP配信と同じ依存 |
-| 3 | **`LM_HASELAB_API_KEY`** | media1, media2, main | キーはこのホストの`/opt/lm-tool/lm-tool.env`。未設定だと無認証で弾かれ、**「GPUが塞がっている」のと区別の付かない失敗**になる |
-| 4 | **既定ブランチ(`binaural-meet`は`master`、`bmMediasoupServer`は`main`)をビルド・配置** | 全マシン + binaural.me | `config.js`は各マシン固有の値が入っているのでpullで上書きせず、該当ブロックだけ足す |
-| 5 | **(選択)CPUサイドカーを本番にも置く** | media*(認識)、main(翻訳) | `BinauralMeet/stt-sidecars`(公開リポジトリ)はCPUのみでGPU不要。**入れると**GPUが塞がっている間も字幕が出て、ja↔enの訳がFuguMTになり質が上がる。**入れないと**その時間は字幕が止まり、ja↔enもM2M-100が訳す |
-| 6 | (任意)`lm-tool`のヘルプとdocを更新 | このホスト | rtx5070tiに`gpuwhisper`モードが増えた。パッチは受け渡し済み |
+| 1 | **`LM_HASELAB_API_KEY`** | media1, media2, main | キーはこのホストの`/opt/lm-tool/lm-tool.env`。未設定だと無認証で弾かれ、**「GPUが塞がっている」のと区別の付かない失敗**になる |
+| 2 | **既定ブランチ(`binaural-meet`は`master`、`bmMediasoupServer`は`main`)をビルド・配置** | 全マシン + binaural.me | `config.js`は各マシン固有の値が入っているのでpullで上書きせず、該当ブロックだけ足す。**3台の既存コミットがそれぞれ違う(mainだけでも3種類)ため、揃え方を先に決める** |
+| 3 | **(選択)CPUサイドカーを本番にも置く** | media*(認識)、main(翻訳) | `BinauralMeet/stt-sidecars`(公開リポジトリ)はCPUのみでGPU不要。**入れると**GPUが塞がっている間も字幕が出て、ja↔enの訳がFuguMTになり質が上がる。**入れないと**その時間は字幕が止まり、ja↔enもM2M-100が訳す |
 
 `media1`/`media2`の`config.js`:
 
@@ -436,6 +439,8 @@ media1とmedia2で同時に喋る人が増えると待ち行列ができる。�
 | 7 | サイドカーのコンテナからの到達性 | 両サイドカーを`127.0.0.1`に加え`172.17.0.1`(docker0)にも待受けさせ、`ufw allow in on docker0 to any port 8190/8191 proto tcp`で範囲を同ホストのコンテナ限定に絞って開放。`config.js`の両エンドポイントも`localhost`→`172.17.0.1`に更新。コンテナ内(`docker exec devbox-hase curl http://172.17.0.1:8190(/8191)/health`)から200を実機確認済み(`CHANGELOG#stt-sidecar-docker0-expose`)。**認証なしで同ホストの全sandboxコンテナから到達可能になったことは受け入れたトレードオフ**(`bm/stt-sidecars/README.md#known-limits`) |
 | 8 | ai4に`cpuWhisper`(faster-whisper medium)を追加、CPU3段構成に | ai1と同一構成の予備機ai4(ほぼ無負荷)に`bm/stt-sidecars`一式を配備、`stt-cpu-whisper.service`を`CPU_WHISPER_MODEL=medium`で起動。ai1→ai4はポートフォワード専用に制限した専用SSH鍵(`permitopen`でai4のループバックのみ)を使う`ai4-stt-tunnel.service`(ai1側systemd常駐)経由、`config.js`は`172.17.0.1:8193`。`stt.backends`内の順序は`gpuWhisper` → ai4の`cpuWhisper`(medium、この行) → ローカルの`cpuWhisper`(small、常時利用可能な最終フォールバック)。11秒の音声で実時間比0.45倍(smallは0.24倍)、実機確認済み(`CHANGELOG#ai4-cpu-whisper-medium`) |
 | 9 | `lm-tool`のヘルプ更新(`gpuwhisper`モード分) | コンテナ内で用意されていたパッチ(`activate-hidream`等の「stops sensevoice/irodori」表記に`gpuwhisper`を追加、`activate-gpuwhisper`サブコマンド新設)を、ホスト側`root`が`/opt/lm-tool/lm_tool.py`に適用(コンテナからは書き込めない共有ファイルのため)。適用前に`patch --dry-run`・適用後に構文チェックと`lm-tool activate-gpuwhisper --help`で実機確認済み(2026-09-26) |
+| 10 | `lm.haselab.net`にGPUサービスへのパス`/GPUWHISPER/`を追加 | `haselab.net`のApache vhost(`/SENSEVOICE/`等と同じ認証ゲート・パターン)に`ProxyPass /GPUWHISPER/ http://rtx5070ti.local:8192/`を追加、`apache2ctl configtest`→`reload`。`curl -H "Authorization: Bearer <key>" https://lm.haselab.net/GPUWHISPER/health`が`{"device":"cuda","model":"large-v3-turbo",...}`を実機確認済み(2026-09-26) |
+| 11 | `ffmpeg`を本番3台(main・media1・media2)に導入 | `apt-get install ffmpeg`、3台とも`ffmpeg -version`で実機確認済み(2026-09-26)。ただし`main`には元々不要(`#todo`の表参照) |
 
 BM側はどれも「エンドポイントURLを `config.js` に書くだけ」で繋がる形にしてあり、
 サービスの実装・配置・認証方式には依存しない。
@@ -526,9 +531,11 @@ GPU1枚で捌ける同時話者数は**未計測**。Phase 1 で実測してこ�
   他の利用者がGPUを使い始めれば会議の途中でCPU縮退に落ちる。落ちたこと自体は
   参加者には見えず、**認識精度だけが静かに変わる**(日本語の短発話で顕著)。
   切り替わりは `media` のログに残す。
-- **話者が言語を切り替えてから追従するまで30秒前後かかる**(実測33〜40秒、発話間隔による)。
-  その間の発話は前の言語として扱われ、翻訳の向きもそのままになる。すぐ切り替えたいときは
-  メニューで話す言語を明示すればよい(そちらは即反映)。
+- **話者が言語を切り替えてから追従するまで、その人の発話時間で12〜24秒かかる**(実測)。
+  **実時間ではない**——聞いている時間は数えないので、たまにしか喋らない人ほど実時間では
+  長くかかる(3秒の発話を30秒おきなら実時間120秒)。その間の発話は前の言語として扱われ、
+  翻訳の向きもそのままになる。すぐ切り替えたいときはメニューで話す言語を明示すればよい
+  (そちらは即反映)。
 - `streaming.ts` と同じく、**対象Producerが載っているworker上でしかSTTは動かない**
   (`media.ts` の `producers` マップを直接参照するため)。複数worker構成では
   話者ごとに別workerでSTTが走ることになる。
@@ -589,9 +596,12 @@ GPU1枚で捌ける同時話者数は**未計測**。Phase 1 で実測してこ�
 - **言語判定は時間で減衰させる(2026-09-26、ユーザーの指示)**: 当初は「一度決めたら戻さない」
   設計にしていた——1文の聞き間違いで判定が飛ぶ方が、話者が言語を変えるより多いと考えたため。
   実際には**話者は言語を切り替える**というので、証拠を半減期20秒で減衰させる形にした。
-  古い発話は時間とともに効かなくなるので、切り替えて話し続ければ30秒前後で追従し、
-  1文だけ違う言語に聞こえても揺れない。判定は**話者ごと**に独立していて、
-  同じ部屋に別々の言語の話者が混ざっていても互いに影響しない。
+  **減衰は実時間ではなく「その人が喋っていた時間+5秒」で進める**(ユーザーの指摘)——
+  実時間で減らすと、**他人の話を聞いている数分の間に証拠がゼロになり**、次の一言が
+  聞き間違いでもその人の言語を決めてしまう。**聞いていることは言語を変えた証拠ではない。**
+  結果、切り替えは発話時間12〜24秒で追従し、1文だけ違う言語に聞こえても揺れない。
+  判定は**話者ごと**に独立していて、同じ部屋に別々の言語の話者が混ざっていても
+  互いに影響しない。
 - **認識は部屋単位、表示は各自(2026-09-26、ユーザーの指示)**: 当初は参加者ごとのON/OFFに
   していたが、字幕は会話の場の性質であって個人の設定ではない——自分だけONにしても
   自分の声しか字幕にならず、会議の役に立たない。認識するかどうかは部屋が決め、
