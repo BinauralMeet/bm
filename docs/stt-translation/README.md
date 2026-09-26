@@ -226,10 +226,11 @@ for-in で自動登録するので、中継だけならサーバーのコード�
 `PARTICIPANT_STT_LANG` を Stored にするのは、後から入室した人にも各参加者の希望言語が
 届くようにするため。サーバーはこれを翻訳先集合の計算に使う。
 
-**認識するかどうかは部屋のプロパティ**(`ROOM_PROP`の`stt`、`'true'`/`'false'`)。
-DataServerは`room.properties`を保持していて`REQUEST_ALL`で新規参加者へ再送するので、
-**後から入室した人も自動的に同じ状態になる**。個々の参加者が持つのは「自分が字幕を見るか」
-(ローカル設定)と「話す言語・読む言語」だけ。
+**認識するかどうかを決める専用のスイッチは無い**。`PARTICIPANT_STT_LANG`に
+`on`(自分が字幕を表示しているか)を載せ、**部屋の誰か1人でもONなら全員が認識される**
+(`#ui`)。Storedなので後から入室した人にもその状態が届き、自分がONにすれば既に居る全員の
+認識も始まる。`on`が無いメッセージ(このフィールドより古いクライアント)はONとして読む——
+古いクライアントが1人居るだけで他の全員の字幕が黙って止まる方が悪い。
 
 **送るのは`DataSync.sendAllAboutMe()`**(接続時と`REQUEST_ALL`/`REQUEST_TO`で
 ローカル参加者の状態をまとめて publish する場所)。設定変更を監視する`autorun`だけに
@@ -242,7 +243,7 @@ DataServerは`room.properties`を保持していて`REQUEST_ALL`で新規参加�
 export interface SpeechText{ sid:string, text:string, lang:string, ts:number }
 export interface SpeechInterim{ sid:string, text:string, lang:string }
 export interface SpeechTranslation{ sid:string, pid:string, texts:{[lang:string]:string} }
-export interface SttLangInfo{ speak:string, show:string }   //  話す言語 / 字幕を読みたい言語
+export interface SttLangInfo{ speak:string, show:string, on?:boolean }  //  話す/読む言語・表示中か
 ```
 
 `sid` は `${pid}-${seq}`。途中結果・確定結果・訳文がこれで1つの発話に束ねられる。
@@ -301,15 +302,21 @@ registerMessageType(MessageType.SPEECH_TRANSLATION, {merge:'instant', recordable
   (この2つを混ぜると、サーバーとクライアントの時計のズレぶんだけ表示時間が狂う。)
 - ひと続きが長くなりすぎたら(140文字目安)、**古い発話から落として**新しい方を残す。
 
-UIはフッターのマイクボタン隣の字幕ボタン。**ボタン本体は「自分が字幕を見るか」**の切り替えで、
-**部屋全体の認識ON/OFFはその「…」メニュー**に置く(言語の選択も同じメニュー)。
-設定は `stores/room/Settings.ts`(localStorageへ永続化)の
-`{showSubtitles, sttSpeak, sttShow}`。`showSubtitles`の既定はON——部屋が認識していない間は
-どのみち何も出ないので、「部屋がONになった瞬間から見える」方が素直。
+UIはフッターのマイクボタン隣の字幕ボタン。**スイッチはこの1つだけ**で、押すと
+「自分が字幕を見るか」が切り替わる。「…」メニューにあるのは言語の選択2つ(話す言語・
+字幕の言語)だけで、**認識そのもののスイッチは無い**: 誰か1人が字幕を表示した時点で
+部屋全体の認識が始まる(`#design`)。判定は
+`models/stt/SttLogic.ts`の`anyoneWantsSubtitles(自分, リモート一覧)`——conferenceを
+知らない純粋関数で、`SttClient`の`autorun`とボタンの見た目の両方がこれを読む。
 
-ボタンの見た目は3状態を区別する: 部屋が認識していない / しているが自分は見ていない /
-見ている。サーバーが要求を拒否したときは理由をツールチップに出すが、**部屋のスイッチは
-勝手に戻さない**——それは全員のもので、拒否は全員に等しく起きているため。
+設定は `stores/room/Settings.ts`(localStorageへ永続化)の
+`{showSubtitles, sttSpeak, sttShow}`。**`showSubtitles`の既定はOFF**——ONだと部屋を開いた
+瞬間から全員が認識されることになり、読む人が居なくても認識器の時間を使ってしまう。
+
+ボタンの見た目は3状態を区別する: 自分が見ている / 見ていないが誰かが見ている(=自分の声も
+文字になっている。これは黙っていてはいけない) / 誰も見ていない。サーバーが要求を拒否した
+ときは理由をツールチップに出すが、**他人の設定は勝手に戻さない**——拒否は全員に等しく
+起きているため。
 
 ## 構成ファイル一覧 {#files}
 
@@ -321,10 +328,11 @@ UIはフッターのマイクボタン隣の字幕ボタン。**ボタン本体�
 | `binaural-meet/src/models/conference/RtcConnection.ts` | `sttStart()`/`sttStop()` 送信(既存 `streamingStart()` と同型) |
 | `binaural-meet/src/models/conference/DataSync.ts` | 3型の `registerMessageType` |
 | `binaural-meet/src/models/stt/SttClient.ts` | 有効化・ミュート・言語設定の監視と送信 |
+| `binaural-meet/src/models/stt/SttLogic.ts` | `anyoneWantsSubtitles()`——誰か1人でも表示していれば認識する判定(テスト対象) |
 | `binaural-meet/src/stores/room/Transcript.ts` | `Utterance` の保持・索引・言語解決 |
 | `binaural-meet/src/components/map/Participant/SpeechBubble.tsx` | アバター脇の字幕 |
 | `binaural-meet/src/components/leftBar/Chat.tsx` | `type:'stt'` の行を扱えるように |
-| `binaural-meet/src/components/footer/SttButton.tsx` | ON/OFFと言語選択 |
+| `binaural-meet/src/components/footer/SttButton.tsx` | 表示のON/OFFと言語選択 |
 | `binaural-meet/src/models/recorder/Player.ts` | 3型の `onPlayback` 登録 |
 | `bmMediasoupServer/src/MediaServer/stt.ts` | `SttSession`(PlainTransport + Consumer + ffmpeg + VAD + 再認識ループ) |
 | `bmMediasoupServer/src/MediaServer/SttVadLogic.ts` | 発話区間判定の純粋ロジック(テスト対象) |
@@ -471,8 +479,8 @@ BM側はどれも「エンドポイントURLを `config.js` に書くだけ」�
   ファイルにも外部ストレージにも書かない。認識サイドカーへ送るのは発話区間のPCMのみで、
   サイドカー側にも保存させない。
 - **認識結果は部屋の全員に配信される。** 個人宛ではない。
-- **認識のON/OFFは部屋単位で、誰か1人が入れると全員の発話が文字になる。**
-  既定はOFF。自分の発話を認識させたくない参加者に残されているのはミュートだけなので、
+- **誰か1人が字幕を表示すると、部屋全員の発話が文字になる。**
+  各自の既定はOFF。自分の発話を認識させたくない参加者に残されているのはミュートだけなので、
   「この部屋は今それをしている」と分かる表示(参加者ごとのインジケータ)と、
   管理者による禁止(下の`sttPolicy`)は**まだ実装されていない宿題**。
 - 部屋ポリシー `sttPolicy`(`'allow'|'deny'`、`ROOM_PROP` 経由、`RoomPropertyName` を拡張)で
@@ -622,5 +630,12 @@ GPU1枚で捌ける同時話者数は**未計測**。Phase 1 で実測してこ�
   していたが、字幕は会話の場の性質であって個人の設定ではない——自分だけONにしても
   自分の声しか字幕にならず、会議の役に立たない。認識するかどうかは部屋が決め、
   各自が決めるのは「見るか」と「どの言語で読むか」だけにした。
+- **その「部屋のスイッチ」も廃止し、表示ONの人が1人でも居れば認識する(2026-09-26、
+  ユーザーの指示)**: スイッチが2つあると、字幕を見たい人は「表示ON」に加えて
+  「部屋の認識ON」も押さねばならず、押し忘れると**何も出ないまま理由も分からない**。
+  逆に「部屋ON・誰も見ていない」という、誰の役にも立たないのに認識器を回し続ける状態も
+  作れてしまっていた。`ROOM_PROP`の`stt`ごと削除し、判定は各参加者が既に配っている
+  `PARTICIPANT_STT_LANG`の`on`のORにした——**部屋の状態を別に持たない**ぶん、
+  入室・退室で勝手に整合する(最後の1人が抜ければ認識も止まる)。
 - **ミュート時はクライアント・サーバーの両方で止める**: 「ミュートしたのに字幕が出る」は
   プライバシー事故であり、片側の実装ミスで起きてはならない不変条件として二重化する。
