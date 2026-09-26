@@ -37,7 +37,7 @@ dev-environment                            sandboxでの開発・動作確認  [
                                                反映されない / mediasoup の音声・映像が繋がらない / `skipEntrance`
                                                を使ったのに 入室しない / headful debug Chrome が起動しない /
                                                アバター一覧が空になる
-stt-translation                            サーバー側音声認識と翻訳字幕  [610L]
+stt-translation                            サーバー側音声認識と翻訳字幕  [613L]
                                              → 発話の文字起こし・翻訳字幕機能を実装する / `MediaServer`のSTTセッションや
                                                `DataServer`の翻訳ハンドラに触る /
                                                字幕が出ない・訳文が来ない原因を切り分ける /

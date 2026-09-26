@@ -395,6 +395,9 @@ stt: {
     {kind: 'gpuWhisper', endpoint: 'https://lm.haselab.net/GPUWHISPER/asr',
       gpuStatus: 'https://lm.haselab.net/SWITCH5070TI', gpuMode: 'gpuwhisper',
       apiKeyEnv: 'LM_HASELAB_API_KEY', timeoutMs: 20000},
+    //  GPUが他用途で塞がっている間はai4が答える(6が済んでから)
+    {kind: 'ai4Whisper', endpoint: 'http://ai4.binaural.me:8190/asr',
+      apiKeyEnv: 'STT_API_KEY', timeoutMs: 60000},
   ],
   maxSessions: 8,           //  ワーカーごと。media1とmedia2で合計16
   interimIntervalMs: 900, hangoverMs: 600,
