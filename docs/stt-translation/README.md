@@ -349,18 +349,47 @@ UIはフッターのマイクボタン隣にSTTボタン(ON/OFFと、話す言�
 
 ### 残っているホスト作業 {#todo}
 
-**本番(`vrc-jp#files`のmediaサーバー)で字幕を動かすのに要るもの。** 開発チェックアウトは
-SSHトンネルで動いているが、本番からは`lm.haselab.net`を経由するしかない。
+**本番(`vrc-jp`、このホスト上でpm2稼働)で字幕を動かすのに要るもの。**
+本番のmediaはこのホストで動くので、**CPUサイドカー(8190/8191)は`127.0.0.1`でそのまま届く**。
+プロキシが要るのはrtx5070ti上のGPU認識だけ。
 
-| # | やること | BMが何を期待するか / 確認方法 |
+| # | やること | 確認方法 |
 |---|---|---|
-| 1 | **`lm.haselab.net` に GPU認識へのパスを生やす**(例 `/GPUWHISPER/` → `192.168.91.101:8192`、rtx5070ti) | **WebSocketではなく素のHTTP**(POST 1往復)なので、`/SENSEVOICE`と同じ形のリバースプロキシで足りる。BMが叩くのは `POST <base>/asr?lang=<ヒント>`(bodyは16kHz mono WAVの生バイト、`Content-Type: audio/wav`)→ `{"text":..., "lang":...}`、**同じパス配下の `POST <base>/translate`**(JSON `{texts,src,dsts}` → 言語→訳文)、それに `GET <base>/health`。**認識と翻訳は同じサービス(8192)なので、パスを1つ通せば両方通る。**認証は他パスと同じAPIキー(BMは`Authorization: Bearer $LM_HASELAB_API_KEY`を送る)。**2点だけ設定注意**: リクエストボディが最大約1MB(30秒の発話)なので上限をそれ以上に、読み取りタイムアウトをBM側の20秒より長く。確認は `curl -H "Authorization: Bearer <key>" https://lm.haselab.net/GPUWHISPER/health` が200 |
-| 2 | **本番mediaサーバーに `ffmpeg`** | `media.ts`が動くマシンで`ffmpeg -version`が通ること。無いと`sttStart`がspawnで失敗し音声取り出しが動かない。RTSP配信(`bmMediasoupServer-rtsp-streaming`)と同じ依存なので既に入っている可能性が高い |
-| 3 | **本番の `config.js` に `stt`/`translation` を書く** | このリポジトリのテンプレートはコメント例のみ(サンドボックス固有の値を混ぜないため)。1が済んだら `stt.backends[0].endpoint` を `https://lm.haselab.net/GPUWHISPER/asr` にする(開発チェックアウトの`127.0.0.1:8192`はSSHトンネル用) |
-| 4 | **本番プロセスに `LM_HASELAB_API_KEY`** | `stt.backends[].apiKeyEnv`が指す環境変数。キーはホストの`/opt/lm-tool/lm-tool.env`にあるが環境変数としては入っていない。未設定だと無認証で弾かれ、**「GPUが塞がっている」のと区別の付かない失敗**になる。pm2なら`ecosystem`の`env`、開発用は`start-dev.sh`が読み込む |
+| 1 | **`lm.haselab.net` にGPUサービスへのパス**(例 `/GPUWHISPER/` → `192.168.91.101:8192`) | `curl -H "Authorization: Bearer <key>" https://lm.haselab.net/GPUWHISPER/health` が `{"model":"large-v3-turbo",...,"translator":"m2m100"}` |
+| 2 | **ホストに `ffmpeg`**(コンテナには入っているが、本番mediaはホストのpm2で動く) | ホストで `ffmpeg -version` |
+| 3 | **本番リポジトリを`feature/stt-translation`にしてビルド** | `cd /root/webapp/bmMediasoupServer && git fetch && git checkout feature/stt-translation && npx tsc`。`config.js`はgit管理下で本番固有の値が入っているので、**pullで上書きしないこと**——`stt`/`translation`ブロックだけ手で足す(テンプレートのコメント参照) |
+| 4 | **本番プロセスに `LM_HASELAB_API_KEY`** | `ecosystem.config.js`の`env`に入れて`pm2 start ecosystem.config.js` → `pm2 save`。未設定だと`lm.haselab.net`側へ無認証で投げて弾かれ、**「GPUが塞がっている」のと区別の付かない失敗**になる |
+| 5 | **クライアント(`binaural-meet`)もビルドして配置** | 同じブランチをビルドして`/var/www/vrc.jp`へ。**これが無いとSTTのUI自体が無い**(サーバーだけ新しくても字幕は出ない) |
+| 6 | (任意)`lm-tool`のヘルプとdocを更新 | rtx5070tiに`gpuwhisper`モードが増えた。パッチは受け渡し済み |
 
-1が済むまでは、本番では`stt.backends`から`gpuWhisper`を外して`cpuWhisper`だけで動かせる
-(字幕は出る。精度と速度が落ちるだけ)。
+本番の`config.js`に入れる値(1が済んだ後):
+
+```js
+stt: {
+  backends: [
+    {kind: 'gpuWhisper', endpoint: 'https://lm.haselab.net/GPUWHISPER/asr',
+      gpuStatus: 'https://lm.haselab.net/SWITCH5070TI', gpuMode: 'gpuwhisper',
+      apiKeyEnv: 'LM_HASELAB_API_KEY', timeoutMs: 20000},
+    {kind: 'cpuWhisper', endpoint: 'http://127.0.0.1:8190/asr', timeoutMs: 40000},
+  ],
+  maxSessions: 8, interimIntervalMs: 900, hangoverMs: 600,
+},
+translation: {
+  endpoints: [
+    {endpoint: 'http://127.0.0.1:8191/translate'},                     //  FuguMT, ja<->en
+    {endpoint: 'https://lm.haselab.net/GPUWHISPER/translate',          //  M2M-100, その他
+      apiKeyEnv: 'LM_HASELAB_API_KEY', timeoutMs: 8000},
+  ],
+  timeoutMs: 5000, maxConcurrent: 4, cacheSize: 2000,
+},
+```
+
+**途中で止めても壊れない**: 1が未了なら`gpuWhisper`の行を外せば`cpuWhisper`だけで字幕は出る
+(精度と速度が落ち、途中結果は出ない)。2が未了だと音声取り出しが動かないので字幕は一切出ないが、
+通話には影響しない。
+
+**本番で動き出すと、GPUが空いているときにBMが自分でrtx5070tiを`gpuwhisper`モードへ
+切り替える**(=ComfyUIが止まる)。ロックを取っている間は手を出さない(`#fallback`)。
 
 ### 済んでいるもの {#done}
 
