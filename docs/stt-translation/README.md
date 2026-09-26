@@ -375,6 +375,18 @@ CPUサイドカー(8190/8191)はこのホストのループバックにしか無
 届かない。GPUサービスは`lm.haselab.net`経由なら届き、**認識と翻訳が同じサービス(8192)
 なのでパスを1本通せばmediaもmainも賄える**。
 
+**ai4への経路はsshトンネルにした。** ai4のサイドカー(8190)を公開IPで待受けさせ、
+ファイアウォールを開け、共有シークレット(`STT_API_KEY`)を配る案も検討したが採らなかった
+——会議音声が平文でインターネットを渡ることになる上、鍵の配布とローテーションが増える。
+代わりに、ai1→ai4で実績のある**ポートフォワード専用に制限した鍵**(`permitopen`でai4の
+ループバックのみ、シェル・sudo不可)と同じ構成を、media1/media2それぞれに1組ずつ用意し、
+systemd常駐の`ssh -N -L 127.0.0.1:8190:127.0.0.1:8190`で繋ぐ。**ai4側の変更はゼロ**
+(サイドカーはループバックのまま、`CPU_WHISPER_LISTEN`も`STT_API_KEY`も不要)。
+接続に使うのは`hase`ではなく**ai4上のトンネル専用アカウント`sttfwd`**で、ai1からの
+既存トンネルもそちらへ移した。`sttfwd`のシェルは`nologin`——`authorized_keys`の
+`command=`制限より一段強く、**シェルもコマンド実行もアカウントレベルで拒否される**
+(ポート転送だけが通る)。疎通確認は各mediaで`curl -s 127.0.0.1:8190/health`。
+
 **1・2(`lm.haselab.net`のGPUパス・`ffmpeg`)は済んだ(`#done`の10・11)。** 残るのは
 コードのデプロイに関わる3点――**2026-09-26、ユーザー判断で保留中**: 3台とも
 `main`ブランチの互いに異なるコミットで止まっており(`feature/stt-translation`は
@@ -395,9 +407,10 @@ stt: {
     {kind: 'gpuWhisper', endpoint: 'https://lm.haselab.net/GPUWHISPER/asr',
       gpuStatus: 'https://lm.haselab.net/SWITCH5070TI', gpuMode: 'gpuwhisper',
       apiKeyEnv: 'LM_HASELAB_API_KEY', timeoutMs: 20000},
-    //  GPUが他用途で塞がっている間はai4が答える(6が済んでから)
-    {kind: 'ai4Whisper', endpoint: 'http://ai4.binaural.me:8190/asr',
-      apiKeyEnv: 'STT_API_KEY', timeoutMs: 60000},
+    //  GPUが他用途で塞がっている間はai4が答える(下の「ai4への経路」が済んでから)。
+    //  sshトンネル経由なので宛先はループバック。`apiKeyEnv`は**書かない**——
+    //  トンネルの内側なのでai4側が認証を要求せず、書いても無意味なヘッダが1本増えるだけ
+    {kind: 'cpuWhisper', endpoint: 'http://127.0.0.1:8190/asr', timeoutMs: 60000},
   ],
   maxSessions: 8,           //  ワーカーごと。media1とmedia2で合計16
   interimIntervalMs: 900, hangoverMs: 600,
@@ -440,7 +453,7 @@ media1とmedia2で同時に喋る人が増えると待ち行列ができる。�
 | 5 | `ffmpeg` | ホスト・sandboxコンテナの両方に導入済み(5.1.9)。コンテナ内でも`ffmpeg -version`が通り、実際に音声取り出しが動作した |
 | 6 | `gpuWhisper`(rtx5070ti、`192.168.91.101:8192`) | 配備済み。`C:\Home\work\gpuwhisper\`に専用venv、`control_api.py`に`gpuwhisper`モードを追加(`hidream`/`sensevoice`/`irodori`と同じ扱い、`WHISPER_PROMPT`もそこで渡す)。待受は`sensevoice`(8189)と同じく`0.0.0.0`——**プロキシは別マシンにあるのでループバックのままでは公開できない**。開発チェックアウトは`start-dev.sh`のSSHトンネル経由、本番は`#todo`の1で生やすパス経由。Windows特有のCUDA DLL問題とcuBLASのバージョン固定は`bm/stt-sidecars/README.md#gpu` |
 | 7 | サイドカーのコンテナからの到達性 | 両サイドカーを`127.0.0.1`に加え`172.17.0.1`(docker0)にも待受けさせ、`ufw allow in on docker0 to any port 8190/8191 proto tcp`で範囲を同ホストのコンテナ限定に絞って開放。`config.js`の両エンドポイントも`localhost`→`172.17.0.1`に更新。コンテナ内(`docker exec devbox-hase curl http://172.17.0.1:8190(/8191)/health`)から200を実機確認済み(`CHANGELOG#stt-sidecar-docker0-expose`)。**認証なしで同ホストの全sandboxコンテナから到達可能になったことは受け入れたトレードオフ**(`bm/stt-sidecars/README.md#known-limits`) |
-| 8 | ai4に`cpuWhisper`(faster-whisper medium)を追加、CPU3段構成に | ai1と同一構成の予備機ai4(ほぼ無負荷)に`bm/stt-sidecars`一式を配備、`stt-cpu-whisper.service`を`CPU_WHISPER_MODEL=medium`で起動。ai1→ai4はポートフォワード専用に制限した専用SSH鍵(`permitopen`でai4のループバックのみ)を使う`ai4-stt-tunnel.service`(ai1側systemd常駐)経由、`config.js`は`172.17.0.1:8193`。`stt.backends`内の順序は`gpuWhisper` → ai4の`cpuWhisper`(medium、この行) → ローカルの`cpuWhisper`(small、常時利用可能な最終フォールバック)。11秒の音声で実時間比0.45倍(smallは0.24倍)、実機確認済み(`CHANGELOG#ai4-cpu-whisper-medium`) |
+| 8 | ai4に`cpuWhisper`(faster-whisper medium)を追加、CPU3段構成に | ai1と同一構成の予備機ai4(ほぼ無負荷)に`bm/stt-sidecars`一式を配備、`stt-cpu-whisper.service`を`CPU_WHISPER_MODEL=medium`で起動。ai1→ai4はポートフォワード専用に制限した専用SSH鍵(`permitopen`でai4のループバックのみ)を使う`ai4-stt-tunnel.service`(ai1側systemd常駐)経由。接続先アカウントは当初`hase`だったが、2026-09-26に`nologin`シェルの専用アカウント`sttfwd`へ移した(`#todo`の「ai4への経路」。本番のmedia1/media2も同じ`sttfwd`を使う)、`config.js`は`172.17.0.1:8193`。`stt.backends`内の順序は`gpuWhisper` → ai4の`cpuWhisper`(medium、この行) → ローカルの`cpuWhisper`(small、常時利用可能な最終フォールバック)。11秒の音声で実時間比0.45倍(smallは0.24倍)、実機確認済み(`CHANGELOG#ai4-cpu-whisper-medium`) |
 | 9 | `lm-tool`のヘルプ更新(`gpuwhisper`モード分) | コンテナ内で用意されていたパッチ(`activate-hidream`等の「stops sensevoice/irodori」表記に`gpuwhisper`を追加、`activate-gpuwhisper`サブコマンド新設)を、ホスト側`root`が`/opt/lm-tool/lm_tool.py`に適用(コンテナからは書き込めない共有ファイルのため)。適用前に`patch --dry-run`・適用後に構文チェックと`lm-tool activate-gpuwhisper --help`で実機確認済み(2026-09-26) |
 | 10 | `lm.haselab.net`にGPUサービスへのパス`/GPUWHISPER/`を追加 | `haselab.net`のApache vhost(`/SENSEVOICE/`等と同じ認証ゲート・パターン)に`ProxyPass /GPUWHISPER/ http://rtx5070ti.local:8192/`を追加、`apache2ctl configtest`→`reload`。`curl -H "Authorization: Bearer <key>" https://lm.haselab.net/GPUWHISPER/health`が`{"device":"cuda","model":"large-v3-turbo",...}`を実機確認済み(2026-09-26) |
 | 11 | `ffmpeg`を本番3台(main・media1・media2)に導入 | `apt-get install ffmpeg`、3台とも`ffmpeg -version`で実機確認済み(2026-09-26)。ただし`main`には元々不要(`#todo`の表参照) |
