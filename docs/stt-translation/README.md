@@ -226,6 +226,11 @@ for-in で自動登録するので、中継だけならサーバーのコード�
 `PARTICIPANT_STT_LANG` を Stored にするのは、後から入室した人にも各参加者の希望言語が
 届くようにするため。サーバーはこれを翻訳先集合の計算に使う。
 
+**認識するかどうかは部屋のプロパティ**(`ROOM_PROP`の`stt`、`'true'`/`'false'`)。
+DataServerは`room.properties`を保持していて`REQUEST_ALL`で新規参加者へ再送するので、
+**後から入室した人も自動的に同じ状態になる**。個々の参加者が持つのは「自分が字幕を見るか」
+(ローカル設定)と「話す言語・読む言語」だけ。
+
 **送るのは`DataSync.sendAllAboutMe()`**(接続時と`REQUEST_ALL`/`REQUEST_TO`で
 ローカル参加者の状態をまとめて publish する場所)。設定変更を監視する`autorun`だけに
 任せてはいけない: 字幕言語はlocalStorageから**入室前に**復元されるので、戻ってきた
@@ -274,8 +279,8 @@ registerMessageType(MessageType.SPEECH_TRANSLATION, {merge:'instant', recordable
 
 | 表示先 | 実装 |
 |---|---|
-| アバター脇の吹き出し | `components/map/Participant/SpeechBubble.tsx`。`Participant.tsx`/`LocalParticipant.tsx` が名前ラベルの上に描く。**話し続けている間は発話がつながって伸び**、読み終わるだけの時間を置いてから消える(`#bubble`)。**聞こえる範囲の参加者だけ**に限定する(`participants.audibleArea()`) |
-| 左バーのチャット欄 | 確定時に `ChatMessage`(`type:'stt'`)を push し、`utterance` 参照を持たせる。`ChatLine` が `textFor()` を読むので、後から届いた訳文で行が自動更新される。既存のタイムライン・色・アバター表示をそのまま再利用 |
+| アバター脇の吹き出し | `settings.showSubtitles`がONのときだけ描く。`components/map/Participant/SpeechBubble.tsx`。`Participant.tsx`/`LocalParticipant.tsx` が名前ラベルの上に描く。**話し続けている間は発話がつながって伸び**、読み終わるだけの時間を置いてから消える(`#bubble`)。**聞こえる範囲の参加者だけ**に限定する(`participants.audibleArea()`) |
+| 左バーのチャット欄 | `showSubtitles`がOFFなら`type:'stt'`の行は出さない(吹き出しだけ消えてチャットには流れ続ける、という中途半端を避ける)。確定時に `ChatMessage`(`type:'stt'`)を push し、`utterance` 参照を持たせる。`ChatLine` が `textFor()` を読むので、後から届いた訳文で行が自動更新される。既存のタイムライン・色・アバター表示をそのまま再利用 |
 | 録画 | `recordable:true` により `Recorder.recordMessage()` が自動で拾う(`getRecordableTypes()`経由)。再生は `Player` に `onPlayback` を3型ぶん登録して同じ `Transcript` に流す |
 | 書き出し | `Transcript.toText()` / `toVTT()` を `RecorderDialog` のボタンから呼ぶ。原文のみ/訳文のみ/併記を選べる |
 
@@ -296,9 +301,15 @@ registerMessageType(MessageType.SPEECH_TRANSLATION, {merge:'instant', recordable
   (この2つを混ぜると、サーバーとクライアントの時計のズレぶんだけ表示時間が狂う。)
 - ひと続きが長くなりすぎたら(140文字目安)、**古い発話から落として**新しい方を残す。
 
-UIはフッターのマイクボタン隣にSTTボタン(ON/OFFと、話す言語・字幕言語のメニュー)。
-設定は `stores/room/Settings.ts`(localStorageへ永続化)に `stt:{enabled, speak, show}` を追加。
-**既定はOFF**、初回ONで「認識結果は部屋の全員に配信されます」の確認を出す。
+UIはフッターのマイクボタン隣の字幕ボタン。**ボタン本体は「自分が字幕を見るか」**の切り替えで、
+**部屋全体の認識ON/OFFはその「…」メニュー**に置く(言語の選択も同じメニュー)。
+設定は `stores/room/Settings.ts`(localStorageへ永続化)の
+`{showSubtitles, sttSpeak, sttShow}`。`showSubtitles`の既定はON——部屋が認識していない間は
+どのみち何も出ないので、「部屋がONになった瞬間から見える」方が素直。
+
+ボタンの見た目は3状態を区別する: 部屋が認識していない / しているが自分は見ていない /
+見ている。サーバーが要求を拒否したときは理由をツールチップに出すが、**部屋のスイッチは
+勝手に戻さない**——それは全員のもので、拒否は全員に等しく起きているため。
 
 ## 構成ファイル一覧 {#files}
 
@@ -438,7 +449,11 @@ BM側はどれも「エンドポイントURLを `config.js` に書くだけ」�
 - **音声は保存しない。** ffmpegの出力はメモリ上のリングバッファだけを通り、
   ファイルにも外部ストレージにも書かない。認識サイドカーへ送るのは発話区間のPCMのみで、
   サイドカー側にも保存させない。
-- **認識結果は部屋の全員に配信される。** 個人宛ではない。UIで明示し、既定はOFF。
+- **認識結果は部屋の全員に配信される。** 個人宛ではない。
+- **認識のON/OFFは部屋単位で、誰か1人が入れると全員の発話が文字になる。**
+  既定はOFF。自分の発話を認識させたくない参加者に残されているのはミュートだけなので、
+  「この部屋は今それをしている」と分かる表示(参加者ごとのインジケータ)と、
+  管理者による禁止(下の`sttPolicy`)は**まだ実装されていない宿題**。
 - 部屋ポリシー `sttPolicy`(`'allow'|'deny'`、`ROOM_PROP` 経由、`RoomPropertyName` を拡張)で
   管理者が部屋ごとに禁止できる。`deny` のときは**サーバー側で `sttStart` を拒否する**
   (クライアントのUIも無効化するが、クライアントの実装を信用しない)。
@@ -568,5 +583,9 @@ GPU1枚で捌ける同時話者数は**未計測**。Phase 1 で実測してこ�
   UIでこそ効く。ここでは字幕は1本の文字列として出すので、結局は最新の仮説を
   丸ごと表示することになり、実装しても表示は1文字も変わらない。
   代わりに「常に最新の仮説を出す」とだけ決めてある(Chromeの音声認識APIと同じ挙動)。
+- **認識は部屋単位、表示は各自(2026-09-26、ユーザーの指示)**: 当初は参加者ごとのON/OFFに
+  していたが、字幕は会話の場の性質であって個人の設定ではない——自分だけONにしても
+  自分の声しか字幕にならず、会議の役に立たない。認識するかどうかは部屋が決め、
+  各自が決めるのは「見るか」と「どの言語で読むか」だけにした。
 - **ミュート時はクライアント・サーバーの両方で止める**: 「ミュートしたのに字幕が出る」は
   プライバシー事故であり、片側の実装ミスで起きてはならない不変条件として二重化する。
