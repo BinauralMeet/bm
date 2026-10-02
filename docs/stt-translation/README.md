@@ -108,12 +108,38 @@ export interface SttBackend{
 
 | バックエンド | 中身 | 位置付け |
 |---|---|---|
-| `gpuWhisper` | rtx5070ti上のfaster-whisper large-v3-turbo(CUDA)。`bm/stt-sidecars/gpu_whisper_server.py`、`control_api.py`の`gpuwhisper`モード | **第1候補。** 11秒の音声を約0.3秒(実測)、句読点付きの文として返る。`WHISPER_PROMPT`でその場の用語(カタカナ語)を渡せる。**プロキシパスが無いのでSSHトンネル経由**(`start-dev.sh`が開く) |
+| `gpuWhisper` | rtx5070ti・rtx5070ti2の2台で同じもの(faster-whisper large-v3-turbo、CUDA)が動く。`bm/stt-sidecars/gpu_whisper_server.py`、各機の`control_api.py`の`gpuwhisper`モード。2台は`pool`で1段として扱う(`#pool`) | **第1候補。** 11秒の音声を約0.3秒(実測)、句読点付きの文として返る。`WHISPER_PROMPT`でその場の用語(カタカナ語)を渡せる。**プロキシパスが無いのでSSHトンネル経由**(`start-dev.sh`が開く) |
 | `cpuWhisper` | このホストのCPU・faster-whisper small | 縮退先。1秒の音声に1.2〜2.4秒かかるので途中結果は出ないが、GPUが使えない間も字幕は出る |
 | `sensevoice` | 同じrtx5070ti上の既存SenseVoice(`POST /transcribe`、multipart、`language`) | 速さは同等(11秒を約0.4秒)だが、**言語モデルを持たずホットワード指定もできないためカタカナ語に弱く**、文が断片化する。`gpuWhisper`を入れた今は使っていない(`config.js`にコメントで残してある) |
 
 **同じGPU上の複数バックエンドに`gpuMode`を設定してはいけない。** 互いに自分のモードへ
 切り替え合って、発話ごとにGPUを取り合う。優先する1つにだけ付ける。
+
+### 認識結果の抑制(信頼度・反復・プロンプト漏れ) {#stt-suppress}
+
+`gpu_whisper_server.py`/`cpu_whisper_server.py`は、`text`を返す前に3種類の
+「これは実際の発話ではなさそうな結果」を弾く(該当すれば`text=''`を返す——
+`stt.ts`が空文字列を「表示するものが無い」として扱う既存経路にそのまま乗るので、
+ワイヤ形式・呼び出し側の変更は不要)。2026-09-27にユーザーが実会議でログを
+見ながら実測して追加した(`CHANGELOG#confidence-filter-live-tuning`):
+
+| 判定 | 環境変数 | 既定値 | 何を捉えるか |
+|---|---|---|---|
+| 信頼度(`avg_logprob`が低い) | `WHISPER_MIN_LOGPROB` | `-1.0` | 不明瞭・雑音混じりの音声。明瞭な発話は実測で`-0.3`〜`-0.8`程度 |
+| 反復(`compression_ratio`が高い) | `WHISPER_MAX_COMPRESSION_RATIO` | `2.4`(faster-whisper自身の既定値と同じ) | 同じ語句が閾値を超えて繰り返される反復ループ。**`avg_logprob`は反復には無力**(自信満々に繰り返すため、実測で`-0.01`〜`-0.07`程度になる)ので併用が必須 |
+| プロンプト漏れ | `WHISPER_PROMPT_LEAK_RATIO` | `0.7` | 不明瞭な音声に対し`WHISPER_PROMPT`の語彙をカンマ区切りでそのまま読み上げたような結果(実例:「ウィンドウ, シェア, コンテンツ, シェア, コンテンツ, スクリーン」——全語が`WHISPER_PROMPT`の語彙)。他の2つはすり抜けた(`avg_logprob`・`compression_ratio`とも平常域)。認識結果をプロンプトと同じ区切り(`,`/`、`)で割り、プロンプト語彙と一致する語の比率で判定。単語1つの発話(プロンプト語彙そのものでも)は対象外 |
+
+翻訳側(`#ingest`)にも同種の反復判定(`MULTI_MAX_COMPRESSION_RATIO`/
+`TRANSLATE_MAX_COMPRESSION_RATIO`)がある——**ASRの原文が正常でも、翻訳が
+独立に反復ループへ暴走することがある**ため、ASR側だけでは足りない。
+
+**運用方針(ユーザー判断、2026-09-27): 正常な発話を誤って消す方が、
+ハルシネーションが漏れるより悪い。** 無音区間でのWhisperの定型文ハルシネーション
+(`"Thank you."`等、動画終わりの決まり文句を無音時に読み上げる、Whisperに
+広く知られた挙動)は`avg_logprob`が閾値をまたぐ境界域に集まり、現状半分程度しか
+弾けていないが、**これ以上閾値を厳しくしない**。単語1つの発話(「スクリーン」等)が
+閾値の境界で`suppressed`が行ったり来たりする不安定さも実見しており、
+厳しくすると本物の短い発話まで消える。
 
 ### バックエンドの選択とフォールバック {#fallback}
 
@@ -153,6 +179,56 @@ stt: {
   次の発話区間で自動的に再試行するので、**GPUが空けば会議の途中でも自動的に復帰する**。
 - 全候補が使えないときはSTTだけが静かに止まる。通話・共有コンテンツ・チャットには
   一切影響させない。クライアントには状態を返し、UIで「今は使えない」と示す。
+
+### 複数のGPU機を1段として使う {#pool}
+
+同じ認識器(と翻訳)が複数のGPU機で動いているとき、`config.js`の各エントリに同じ`pool`名を
+付けると、それらはフォールバック列の**1段**になる(段の位置は、そのpoolの最初のエントリの位置)。
+`pool`の無いエントリは、これまで通りそれだけで1段。今は`gpu`というpoolに
+rtx5070ti(`/GPUWHISPER`・`/SWITCH5070TI`)とrtx5070ti2(`/GPUWHISPER2`・`/SWITCH5070TI2`)が入る。
+
+段の中での選び方(`src/MediaServer/GpuPool.ts`、STTは`SttBackendSelector`、翻訳は`translation.ts`):
+
+- **空いているものだけが候補。** サーキットブレーカーが開いているもの、ロックを誰かが
+  持っているものは外す。ロックの読み方は`#fallback`と同じ(読むだけ、取らない)。STTでは
+  段の全員の`usable()`を同時に呼ぶので、別モードで遊んでいる機械には、もう片方が答えている
+  間にも切り替えを頼む。
+- **処理中の要求が少ないものから。** 同数なら順番に回す。片方しか空いていなければ全部そちら、
+  両方空いていれば交互に割り振られる。数えるのはプロセスごと(media1とmedia2はそれぞれ別に
+  数える)。
+- **1台が失敗したら、同じ段のもう1台で再試行する。** 両方だめなときに初めて次の段へ落ちる。
+- 翻訳では、最初に答えたものでその段は終わる。もう1台は同じモデルなので、1台目が省いた言語
+  (低信頼度・未対応ペア)は、もう1台も省く。翻訳のエントリにも`gpuStatus`を書ける。書くと
+  ロック中の機械を避ける(書かなければロックは見ない。これまでと同じ)。
+- 使った段が変わったときだけログを出す(poolは1つとして数える)。どの機械が答えたかは
+  `BM_STT_DEBUG=1`のときだけ出る。
+
+**`gpuMode`は「1台のGPUにつき1エントリだけ」のまま。** poolの各エントリはそれぞれ別の機械の
+`gpuStatus`を指すので、2つとも`gpuMode`を持ってよい。
+
+### 会議の始めのウォームアップ {#warmup}
+
+GPUの認識器が「最初の発話」で遅くなる理由は2つあり、それぞれ別の場所で潰している。
+
+- **起動直後の初回推論**(CUDA・cuBLASの初期化)。モードの再起動直後で1.6秒、
+  新しく入れたマシンの最初の起動では24秒かかった(2回目以降は0.2秒)。
+  `gpu_whisper_server.py`が待ち受けを始める前に、モデルの複製ごとに1回のダミー認識と、
+  1回のダミー翻訳を実行する(`warm_up()`)。**ポートが答え始めた時点で、もう速い。**
+- **GPUが別のモードで動いている・止まっている**。切り替えはモデルの読み込みを伴い、
+  発話1つ分の待ち時間には収まらない(`#fallback`)。そこで、その mediaワーカーで
+  **STTセッションが0件から1件になったとき**(書き起こしONの会議が始まったとき)に、
+  `SttBackendSelector.warmUp()`で全バックエンドに準備を頼む。挨拶をしている間に
+  切り替えとウォームアップが終わる。
+
+`HttpSttBackend.warmUp()`の中身:
+
+- `gpuStatus`の無いバックエンド(CPU)は何もしない。
+- `usable()`を通すので、`#fallback`の規則がそのまま効く。ロック中なら何もしない。
+  別モードで空いていれば切り替えを頼む(`ACTIVATE_RETRY_MS`の3分の抑制も同じ)。
+  そのモードで動いていれば、1秒の弱いノイズを1回認識させる(結果は捨てる)。
+- **バックエンドごとに5分に1回まで**(`WARM_INTERVAL_MS`)。部屋で字幕がONになると、
+  参加者の数だけ`sttStart`が一度に来るが、要求は1回で済む。
+- 待たずに投げる。失敗してもSTTには影響しない。
 
 ### 認識結果の注入と翻訳 (main.ts) {#ingest}
 
@@ -202,6 +278,27 @@ BinauralMeetは公開サービスなので**ライセンスがサービス全体
 同じ経路に乗るため。GPUを取られれば両方止まるが、その時はCPU側のFuguMTがja↔enを拾う。
 
 翻訳先言語の集合計算は `DataServer/TranslationTargets.ts` に純粋関数として切り出す。
+
+**低信頼度・反復の訳文は破棄する。** 両バックエンドとも、短い・不明瞭な原文に対して
+「一見流暢だが実際には元の発話と無関係な文」をそのまま返すことがある——通常の訳質の
+バラつきとは別種の失敗で、文面だけでは正しい訳と区別が付かない。**2026-09-27に
+実会議で実測したところ、デコードスコアだけでは反復ループ(「にゃにゃにゃ…」を
+数百回等)を全く検出できなかった**(自信満々に繰り返すため、スコアはほぼ最高値)。
+そのため2つの判定を両方行う:
+
+- CTranslate2の`return_scores`で取ったデコードスコア(1トークンあたりの平均対数尤度)が
+  `MULTI_MIN_SCORE`(`gpu_whisper_server.py`)/`TRANSLATE_MIN_SCORE`(`translate_server.py`、
+  既定`-1.2`)を下回る
+- 訳文自体の圧縮率(`zlib`、ASR側`compression_ratio`と同じ発想、`#stt-suppress`参照)が
+  `MULTI_MAX_COMPRESSION_RATIO`/`TRANSLATE_MAX_COMPRESSION_RATIO`(既定`2.4`)を超える
+  ——**原文(ASR結果)が正常でも、翻訳が独立に反復ループへ暴走することがある**ので
+  ASR側の判定だけでは足りない
+
+いずれかに該当したら**そのdstを応答から省く**(未対応言語ペアと同じ「翻訳なし」の
+扱いになる)。この判定は1発話=1テキストのバッチでのみ行う(現状の呼び出し方が
+それしかないため。複数テキストの一括リクエストでは位置対応が壊れるので判定を
+スキップする)。既定値はいずれも実測に基づく初期値ではあるが、まだ大まかな調整
+(`CHANGELOG#confidence-filter-live-tuning`)にとどまる。
 
 ### メッセージ型 {#messages}
 
@@ -318,6 +415,15 @@ UIはフッターのマイクボタン隣の字幕ボタン。**スイッチは�
 ときは理由をツールチップに出すが、**他人の設定は勝手に戻さない**——拒否は全員に等しく
 起きているため。
 
+**訳が無い(=元の言語のまま)吹き出しは色を変える。** 読者の字幕言語が話者の発話言語と
+違うのに翻訳が届かなかった場合(低信頼度で破棄された、サービスが落ちている、等)、
+`textFor()`は黙って原文にフォールバックするが、それが実際の訳文と見分けが付かないと
+「変な訳が出た」ように見えてしまう。`Transcript.bubbleOf()`が返す`untranslated`フラグ
+(`joinRun()`が発話ごとに判定、run中1つでも該当すれば吹き出し全体に立てる)を
+`SpeechBubble.tsx`が見て、通常の白/グレーではなく暖色(琥珀色)で表示する
+(`provisional`との組み合わせは既存の濃淡をそのまま流用)。読者が発話言語を選んでいる
+場合(そもそも翻訳が要らない)はこのフラグは立たない。
+
 ## 構成ファイル一覧 {#files}
 
 | リポジトリ / ファイル | 役割 |
@@ -412,10 +518,16 @@ systemd常駐の`ssh -N -L 127.0.0.1:8190:127.0.0.1:8190`で繋ぐ。**ai4側の
 ```js
 stt: {
   backends: [
-    {kind: 'gpuWhisper', endpoint: 'https://lm.haselab.net/GPUWHISPER/asr',
+    //  2台のGPU機を1段として負荷分散する(`#pool`)
+    {kind: 'gpuWhisper', name: 'gpuWhisper@rtx5070ti', pool: 'gpu',
+      endpoint: 'https://lm.haselab.net/GPUWHISPER/asr',
       gpuStatus: 'https://lm.haselab.net/SWITCH5070TI', gpuMode: 'gpuwhisper',
       apiKeyEnv: 'LM_HASELAB_API_KEY', timeoutMs: 20000},
-    //  GPUが他用途で塞がっている間はai4が答える(下の「ai4への経路」が済んでから)。
+    {kind: 'gpuWhisper', name: 'gpuWhisper@rtx5070ti2', pool: 'gpu',
+      endpoint: 'https://lm.haselab.net/GPUWHISPER2/asr',
+      gpuStatus: 'https://lm.haselab.net/SWITCH5070TI2', gpuMode: 'gpuwhisper',
+      apiKeyEnv: 'LM_HASELAB_API_KEY', timeoutMs: 20000},
+    //  両方のGPUが他用途で塞がっている間はai4が答える(下の「ai4への経路」が済んでから)。
     //  sshトンネル経由なので宛先はループバック。`apiKeyEnv`は**書かない**——
     //  トンネルの内側なのでai4側が認証を要求せず、書いても無意味なヘッダが1本増えるだけ
     {kind: 'cpuWhisper', endpoint: 'http://127.0.0.1:8190/asr', timeoutMs: 60000},
@@ -430,16 +542,25 @@ stt: {
 ```js
 translation: {
   endpoints: [
-    {endpoint: 'https://lm.haselab.net/GPUWHISPER/translate',
+    //  STTと同じ2台を1段として負荷分散する。`gpuStatus`でロック中の機械を避ける(`#pool`)
+    {endpoint: 'https://lm.haselab.net/GPUWHISPER/translate', pool: 'gpu',
+      gpuStatus: 'https://lm.haselab.net/SWITCH5070TI',
+      apiKeyEnv: 'LM_HASELAB_API_KEY', timeoutMs: 8000},
+    {endpoint: 'https://lm.haselab.net/GPUWHISPER2/translate', pool: 'gpu',
+      gpuStatus: 'https://lm.haselab.net/SWITCH5070TI2',
       apiKeyEnv: 'LM_HASELAB_API_KEY', timeoutMs: 8000},
   ],
   timeoutMs: 5000, maxConcurrent: 4, cacheSize: 2000,
 },
 ```
 
-**GPUサービスは全ワーカーで共有される。** `WHISPER_WORKERS`(既定2)が同時に捌ける本数なので、
-media1とmedia2で同時に喋る人が増えると待ち行列ができる。増やすときはVRAMと相談
-(large-v3-turbo fp16が1本あたり約1.5GB)。
+**GPUサービスは全ワーカーで共有される。** `WHISPER_WORKERS`(既定2)が1台で同時に捌ける本数
+なので、2台とも空いていれば4本まで待たずに捌ける。それを超えて同時に喋る人が増えると
+待ち行列ができる。増やすときはVRAMと相談(large-v3-turbo fp16が1本あたり約1.5GB)。
+
+2台目への経路は`lm.haselab.net`の`/GPUWHISPER2/`(認識・翻訳)と`/SWITCH5070TI2/`
+(モード・ロック)。認証は1台目のパスと同じ。本番のmedia1・media2・mainはこの形の
+`config.js`で動いている(`CHANGELOG#stt-gpu-pool`)。
 
 **途中で止めても壊れない**: 1が未了なら`stt.backends`を空のままにしておけば、STTを
 有効にしたクライアントに拒否が返るだけ。通話・共有コンテンツには一切影響しない。
@@ -465,6 +586,7 @@ media1とmedia2で同時に喋る人が増えると待ち行列ができる。�
 | 9 | `lm-tool`のヘルプ更新(`gpuwhisper`モード分) | コンテナ内で用意されていたパッチ(`activate-hidream`等の「stops sensevoice/irodori」表記に`gpuwhisper`を追加、`activate-gpuwhisper`サブコマンド新設)を、ホスト側`root`が`/opt/lm-tool/lm_tool.py`に適用(コンテナからは書き込めない共有ファイルのため)。適用前に`patch --dry-run`・適用後に構文チェックと`lm-tool activate-gpuwhisper --help`で実機確認済み(2026-09-26) |
 | 10 | `lm.haselab.net`にGPUサービスへのパス`/GPUWHISPER/`を追加 | `haselab.net`のApache vhost(`/SENSEVOICE/`等と同じ認証ゲート・パターン)に`ProxyPass /GPUWHISPER/ http://rtx5070ti.local:8192/`を追加、`apache2ctl configtest`→`reload`。`curl -H "Authorization: Bearer <key>" https://lm.haselab.net/GPUWHISPER/health`が`{"device":"cuda","model":"large-v3-turbo",...}`を実機確認済み(2026-09-26) |
 | 11 | `ffmpeg`を本番3台(main・media1・media2)に導入 | `apt-get install ffmpeg`、3台とも`ffmpeg -version`で実機確認済み(2026-09-26)。ただし`main`には元々不要(`#todo`の表参照) |
+| 12 | 2台目のGPU機rtx5070ti2に同じ`gpuwhisper`を配備 | rtx5070tiと同じ`server.py`・同じ版のvenv・同じM2M-100変換済みモデル。`control_api.py`は`gpuwhisper`モードとロックだけの縮小版(同じAPI)、ログオン時に起動。BMの`pool`で1台目と負荷分散する(`#pool`)。直接叩いて11秒の音声を0.18秒で認識、ja→zh/ko/enの翻訳も確認(2026-09-30、`CHANGELOG#stt-gpu-pool`) |
 
 BM側はどれも「エンドポイントURLを `config.js` に書くだけ」で繋がる形にしてあり、
 サービスの実装・配置・認証方式には依存しない。
@@ -639,3 +761,10 @@ GPU1枚で捌ける同時話者数は**未計測**。Phase 1 で実測してこ�
   入室・退室で勝手に整合する(最後の1人が抜ければ認識も止まる)。
 - **ミュート時はクライアント・サーバーの両方で止める**: 「ミュートしたのに字幕が出る」は
   プライバシー事故であり、片側の実装ミスで起きてはならない不変条件として二重化する。
+- **2台のGPU機の振り分けはBM側(`pool`)で行い、Apacheのロードバランサーにはしない**:
+  `lm.haselab.net`に`mod_proxy_balancer`で1本のパスを作る案は採らなかった。振り分けで
+  見たいのは「そのGPUのロックを誰かが持っていないか」と「そのGPUが認識用モードで動いているか」
+  で、どちらも各機械の`control_api.py`にしか無い。Apacheのヘルスチェックはポートが応答するか
+  しか見られず、ロック中の機械にも音声を送ってしまう。モードの切り替えも1台ずつ頼む必要がある。
+  BMは既にこの2つを読むコード(`#fallback`)を持っているので、段の中で候補を複数にするだけで
+  済んだ。

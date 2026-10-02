@@ -754,3 +754,391 @@ ai4は認証を要求しない。`SttBackend`は環境変数が未定義なら�
 **動作確認**: `tsc --noEmit`が両リポジトリで通り、テストは binaural-meet 162件・
 bmMediasoupServer 62件すべて成功(`SttLogic.test.ts`を新規追加、`RoomInfo.test.ts`の
 `stt`プロパティのテストは対象が消えたので削除)。実会議での確認はまだ。
+
+## 2026-09-26(3) — デプロイ手順・スクリプトが無かったので新規作成、config.jsの混入バグを発見 {#deploy-script-and-doc}
+
+ユーザーから「上の機能を本番(main/media1/media2/binaural.me)へ反映して」との依頼
+(`binaural-meet` masterを`33bbd9a`→`6809bb5`、`bmMediasoupServer` mainを
+`c018dcf`→`520cbcf`)。既存のデプロイ手順・スクリプトが無いか確認したところ
+(`stt-translation#todo`に手順の説明はあったがスクリプトは無し)、ユーザーから
+「無ければドキュメント化とスクリプト作成を」との指示。`deploy-prod.sh`(`bm/`直下)と
+`docs/deploy`を新規作成した。詳細・設計判断は`deploy#design`参照。
+
+**調査中に見つけた問題**:
+
+- `binaural-meet`の対象コミット範囲が**`public/config.js`を変更していた**
+  (`configTitech`→`configLocal`——このサンドボックスの開発用エンドポイントを指す)。
+  ユーザーは「今回はconfig.js変更は不要」と認識していたが実際には混入していた。
+  `deploy-prod.sh`は実機の値を退避・復元する設計にしたのでデプロイ自体への影響は
+  避けられるが、**リポジトリ側にこの混入が残っている**ので、いずれ直す必要がある
+  (別マシンで新規cloneした場合などに影響しうる)。
+- `main`/`media1`/`media2`への`ssh`はこのホストの自動モード分類器が「本番への
+  操作」として一律ブロックした——読み取り専用のコマンド(`whoami`、SSH到達確認)
+  も含めて拒否("Production Reads")。そのため`deploy-prod.sh`は`--dry-run`での
+  内容レビューのみで、実機実行はまだ検証できていない。
+- `binaural.me`と`main.titech.binaural.me`はDNSが別のマシンを指しており、
+  どちらも`~/.ssh/config`にエイリアスが無い。リポジトリの配置場所・配信ディレクトリも
+  未確認(`deploy#limits`)。
+
+**現在残っているもの**: 上記3点(config.jsの混入バグの修正、本番アクセスの許可、
+binaural.meの接続情報)がユーザーへの確認待ち。実際のデプロイ実行はまだ。
+
+## 2026-09-26(4) — 本番4台へ実デプロイ、途中でconfig.js誤破壊事故と復旧 {#deploy-executed-and-incident}
+
+上の3点にユーザーが回答: 「1(config.js混入バグ)は直して」「2(本番sshの許可)は
+マニュアルモードにするので実行して」「3(binaural.meの接続先)はai1のエイリアス、
+dnsで見えないか」。
+
+**1の修正**: `binaural-meet`の`public/config.js`末尾を`configLocal`→`configTitech`に
+戻す1行修正を`master`へcommit・push(`18e13ae`)。デプロイ対象コミットは
+`6809bb5`ではなく`18e13ae`に変更。
+
+**3の調査**: `binaural.me`/`ai1.binaural.me`/`ai1.haselab.net`は全てこのホスト
+(`ai1`)自身。ssh不要。調査の過程で`/root/webapp/`一式は
+**vrc.jp用**(ユーザー確認: 「ソースは共有だが全く別アプリ」)であり、binaural.meの
+ビルド元ではないと判明。正しい手順はホスト側CHANGELOG-004#binaural-me-rebuild
+(2026-08-06)の前例通り、`bm/binaural-meet`(この開発チェックアウト)から
+`git worktree`で対象コミットだけ分離してビルドすること——`deploy-prod.sh`の
+`client`をこの方式に書き直した(SSHベースの案は撤回)。
+
+**binaural.meへのデプロイ**(`client 18e13ae`): dry-runで実ビルド・config.js確認まで
+通してから本番実行。`/var/www/binaural.me`を更新、`https://binaural.me/`が200・
+`config.js`が`configTitech`のまま・`public_packages/`無変更を確認。
+バックアップ`/root/binaural.me-backup-20260926-210110`。
+
+**main/media1/media2へのデプロイ**(`server-all 520cbcf`)で事故発生:
+`/root/bmMediasoupServer`が`root`所有・sshログインは`aiops`だったため、まず
+git操作が"dubious ownership"で失敗 → `sudo -n`昇格に変更して解消(pm2名は
+`main`=`bm`、`media1`/`media2`=`bmm`と実機で確認、事前の推定が正しかった)。
+
+**そのすぐ後、`deploy_server`内の1行が本番のconfig.jsを破壊した。**
+「pullでconfig.jsが動いていたら実機の値へ戻す」つもりで入れていた
+`git checkout HEAD -- config.js`は、**gitの側(コミット済みの汎用値)を勝たせる**
+コマンドで、意図(実機の値を勝たせる)と向きが逆だった。3台とも実行され、
+STT/translationの`backends`/`endpoints`が空に、`main`のリッスンアドレスが
+`https://0.0.0.0:443`から`https://localhost:3100`相当(外部到達不可)へ、
+約19分間(21:04〜21:23)書き換わった。
+
+**復旧**: 幸い直前に`cp -p config.js /root/.config.js.deploy-backup.<timestamp>`で
+退避していたため、3台とも退避ファイルを`config.js`へcpし直し→`npm run build`→
+`pm2 restart`で復旧。ログで`main`が`https://0.0.0.0:443`で待受け直したこと、
+`media1`/`media2`が`workerId`登録に成功したことを確認。
+
+**恒久修正**: `deploy-prod.sh`の`deploy_server`を、`client`と同じ
+「`cp`で退避 → mergeの後に退避ファイルを実ファイルへcpし戻す」という
+**向きが対称な**実装に直した(`git checkout`/`git reset`のような「gitへ戻す」
+系のコマンドを「実機の値を守る」目的では使わない、という教訓を`deploy#design`に
+明記)。
+
+**動作確認**: `main`/`media1`/`media2`とも`git log -1`が`520cbcf`、`pm2 ls`で
+`bm`/`bmm`が`online`、`config.js`が退避前バックアップと一致することを確認。
+binaural.meは上記の通り200・configTitech確認済み。
+
+## 2026-09-27 — 低信頼度の訳文を字幕と見分けられるようにした(実装のみ、未commit) {#untranslated-bubble}
+
+ユーザーから: 「翻訳に`I can't translate it`のような、翻訳ではない警告のようなものが
+混ざっているように思う。区別がつくならないなら表示を工夫したい」。調べたところ
+**現状は区別する仕組みが無かった**——`translation.ts`の`callOne()`はバックエンドが返した
+文字列が空でなければ無条件に正しい訳として採用しており、`Transcript.textFor()`も
+「訳があればそれ、無ければ原文」の二択で、原文が「訳が来なかったから原文」なのか
+「そもそも訳が要らない(読者の言語=話者の言語)」なのかを区別していなかった。
+翻訳バックエンド自体はFuguMT/M2M-100(いずれもCTranslate2の専用NMTモデル、LLMではない)
+なので、`I can't translate it`のような一見自然な文はモデルが短い/不明瞭な原文に対して
+出す定型的な出力だろうという仮説のもと、ユーザーに実装方針を確認: (1)
+怪しい訳をどう表示するか→**「元の発話だけを、色を変えて表示」**、(2)
+具体例の有無→**無し、閾値は仮置きで進めてよい**。
+
+**サーバー側(2つのsidecar、`stt-sidecars`)**: `translate_batch`に`return_scores=True`を
+渡し、1トークンあたりの平均対数尤度が`TRANSLATE_MIN_SCORE`
+(`translate_server.py`)/`MULTI_MIN_SCORE`(`gpu_whisper_server.py`、既定`-1.2`、
+未測定の仮値)を下回ったら、そのdstを応答から**省く**(未対応言語ペアと同じ経路に
+乗せるだけで、`bmMediasoupServer`側のワイヤ形式は変更不要)。1発話=1テキストの
+バッチでのみ判定(現状の呼び出し方がこれしかないため。複数件のバッチでは
+位置対応が壊れるので判定をスキップし、コメントで理由を明記)。
+
+**クライアント側(`binaural-meet`)**: `Transcript`の`Bubble`に`untranslated`を追加
+(`joinRun()`が発話ごとに「読者の言語≠発話言語なのに訳が無い」かどうかを判定、
+runの中に1つでもあれば吹き出し全体に立てる)。`SpeechBubble.tsx`はこれを見て、
+通常の白/グレーではなく琥珀色の背景・文字色で表示する(`provisional`との濃淡は
+そのまま流用)。読者が発話言語自体を選んでいる場合(訳が要らない)はフラグが立たない
+——「翻訳が無い」と「翻訳が要らない」を混同しない設計。
+
+**動作確認**: `binaural-meet`は`tsc --noEmit`通過、`vitest run`が164件全て成功
+(新規2件・既存2件更新)。sidecar側は`python3 -m py_compile`のみ(GPU/モデルが
+このサンドボックスに無いため実データでの確認は未実施)。`stt-translation#ingest`・
+`#bubble`に設計を追記。
+
+**現在残っているもの**: `binaural-meet`・`stt-sidecars`とも**まだcommit/pushしていない**
+——ユーザーへの確認待ち。しきい値`-1.2`は実測に基づかない仮値なので、本番投入後に
+実際の(原文, 訳文, スコア)を見て調整が要る。
+
+## 2026-09-27 — 上のデプロイを実施、rtx5070tiでの再起動の落とし穴を発見 {#untranslated-bubble-deployed}
+
+ユーザー承認(「デプロイして、ログを見て閾値を詰めてください」)を受けて実施:
+
+- `binaural-meet`(`d0db35a`)・`stt-sidecars`(`ab5715c`)ともcommit・push済み。
+- `binaural-meet`は`binaural.me`へデプロイ(`deploy-prod.sh client`)、200・configTitech確認済み。
+- `stt-sidecars`のFuguMT側(`translate_server.py`)は`stt-translate.service`(ai1、
+  このワークスペースの`stt-sidecars/`から直接動く)を再起動して反映。ただし
+  **本番`main`の`translation.endpoints`は現状GPUWHISPER(rtx5070ti)のみで、
+  FuguMTは配線されていない**(`stt-translation#todo`項目3が未実施のまま)ため、
+  実際の会議には影響しない。
+- GPU側(`gpu_whisper_server.py`→rtx5070tiの`C:\Home\work\gpuwhisper\server.py`、
+  実際に本番`main`が使っている方)は、ユーザーに実行中の会議の有無を確認
+  (`/status`でgpuwhisperのみ稼働・`server.log`の直近タイムスタンプが数秒前=会議進行中と
+  判明)。ユーザーから「今やってください」と明示の許可を得てから実施。
+
+**rtx5070tiでの落とし穴**: そのホストは本リポジトリのcheckoutを持たず(ai4と同じ、
+手動コピーの`server.py`)、**`sidecar_auth`の配線が無い**(このリポジトリのHEADには
+ある)という既知の差分があったため、まるごと上書きせず**このリポジトリのHEADとの差分
+だけを`patch`で当てて**アップロード(diffが無関係な箇所に触れないことを確認してから)。
+さらに、**`POST /activate/gpuwhisper`は既に稼働中なら何もしない**(`control_api.py`が
+`_is_running`なら起動処理をスキップする作り)ため、コード反映には
+**`/activate/none`→`/activate/gpuwhisper`**の順で明示的に止めてから起動し直す必要があった
+(`stt-sidecars`のREADMEに追記、`#gpu`)。反映は`/health`・`/status`・
+`curl .../translate`の実リクエストで確認、その後もASR処理ログが途切れず再開したこと
+(再起動の空白は数秒)を確認。バックアップは`server.py.bak-20260927-pre-confidence-filter`。
+
+**残っているもの**: 実測での閾値調整——本番のgpuwhisperログに`translate: dropping
+low-confidence hypothesis`が出るか、しばらく`server.log`を観察してから`-1.2`を見直す。
+
+## 2026-09-27(2) — 実際の会議でログを見ながら閾値調整、3つの検出軸を追加・実機確認 {#confidence-filter-live-tuning}
+
+ユーザーが実際の会議で「翻訳できない声」「明瞭な発話」の両方を発声し、その場で
+`gpu_whisper_server.py`(rtx5070ti本番)のログをリアルタイムに監視しながら
+イテレーションした。約2時間、200件超のログサンプルを実見して以下が判明・対応:
+
+**1. 翻訳側スコア(`MULTI_MIN_SCORE`)は単独では機能しない。** 意味不明な発話
+(「にゃにゃにゃ…」を数百回等)をM2M-100が翻訳した際、スコアは`-0.01`〜`-0.07`と
+ほぼ最高の自信度だった——モデルは同じ内容を予測し続けるのが「簡単」なので confident
+になる。翻訳が独立に反復ループへ暴走するケース(原文は正常なのに訳が
+「No. No. No. No.」等に暴走)も複数確認。**対策**: 訳文自体の圧縮率
+(`zlib`、faster-whisperの`compression_ratio`と同じ発想)を`MULTI_MAX_COMPRESSION_RATIO`
+/`TRANSLATE_MAX_COMPRESSION_RATIO`(既定`2.4`)としてスコアに追加。
+
+**2. ASR側(`avg_logprob`)の方が実際には有効な信号だった。** 意味不明な発話の
+`avg_logprob`は明瞭な発話(目安`-0.3`〜`-0.8`)より明確に低く(`-1.5`〜`-4.6`程度)、
+実測で閾値`-1.0`(`WHISPER_MIN_LOGPROB`)を設定。ただし**単発の反復ループには
+無力**(「にゃにゃにゃ」が`avg_logprob=-0.07`)なので、ここにも
+`compression_ratio > 2.4`(`WHISPER_MAX_COMPRESSION_RATIO`、faster-whisper自身の
+既定値と同じ)を追加。ASR結果が抑制された場合は`text=''`を返す
+(`bmMediasoupServer`の`stt.ts`が空文字列を「表示するものが無い」と扱う既存経路に
+そのまま乗る、ワイヤ形式の変更不要)。
+
+**3. `initial_prompt`自体がハルシネーションの原因になるケースをユーザーが発見。**
+不明瞭な発話に対し「ウィンドウ, シェア, コンテンツ, シェア, コンテンツ, スクリーン」
+という、`WHISPER_PROMPT`の語彙をそのままカンマ区切りで読み上げたような認識結果が
+出現——`avg_logprob`(`-0.59`)も`compression_ratio`(`1.41`)も平常域で、上記2つの
+検出をすり抜けていた。**対策**: 認識結果をプロンプトと同じ区切り(`,`/`、`)で分割し、
+プロンプト語彙と一致する語の比率が`WHISPER_PROMPT_LEAK_RATIO`(既定`0.7`)以上なら
+プロンプト漏れと判定して抑制。単語1つ(プロンプト語彙そのものでも)だけの発話は
+対象外——「スクリーン」とだけ言うのは普通にあり得るため。
+
+**4. クライアント側の`untranslated`表示(前回作業分)も同じ実会議で確認**: 訳が
+無い箇所が琥珀色で表示されることを確認。
+
+**すべて実機(main/media1/media2ではなくrtx5070ti側)で反映・動作確認済み**
+(`server.py`はgitチェックアウトを持たない手動配置、`patch`で差分だけ当てて
+`activate/none`→`activate/gpuwhisper`で再起動、の手順は`stt-sidecars`README`#gpu`参照)。
+
+**残った既知の制限、ユーザー判断で「今回は見送り」**: 無音区間での定型文
+ハルシネーション(`"Thank you."`/`"I'll see you next time."`等、Whisperが学習データの
+動画終わりの決まり文句を無音時に読み上げる、broadly知られた挙動)が数秒間隔で
+繰り返し出現し、`avg_logprob`が`-0.6`〜`-1.1`程度で閾値`-1.0`をまたぐため
+半分程度しか抑制できていない。**ユーザーの判断**: 「ハルシネーションはとりあえず
+諦めて、下手に抑制しない状態で運用する。正常な発話を異常と誤認する方が怖い」——
+つまり**閾値をこれ以上厳しくしない**方針。単語1つの発話(「スクリーン」
+「コンテンツ」等)が閾値`-1.0`の境界で`suppressed`が行ったり来たりする不安定さも
+実見しており、これ以上厳しくすると本物の短い発話まで消える懸念と符合する。
+
+**次に見送った改善候補**(ユーザーへの提案のみ、未実装):
+- 無音時の決まり文句(`"Thank you."`等)をブロックリスト化する
+- 短い発話は`avg_logprob`が本質的に不安定なので、発話の長さで閾値を変える
+- 圧縮率の閾値をもう少し下げる(`"Oh"`×9回が`ratio=2.00`ですり抜けた実例あり)
+
+いずれも**今回は実装しない**(ユーザー判断)。しきい値は全て現状維持
+(`WHISPER_MIN_LOGPROB=-1.0`、`WHISPER_MAX_COMPRESSION_RATIO`/
+`MULTI_MAX_COMPRESSION_RATIO`/`TRANSLATE_MAX_COMPRESSION_RATIO=2.4`、
+`WHISPER_PROMPT_LEAK_RATIO=0.7`、`MULTI_MIN_SCORE`/`TRANSLATE_MIN_SCORE=-1.2`)。
+
+## 2026-09-27(3) — 同名参加者が互いに見えない事故を調査、再接続時の二重ソケットを修正 {#dataconnection-reconnect-storm}
+
+ユーザーから: 「今haselabに2人入っていますがお互いが見えません」。`main`の
+`bm-out.log`を見ると、`長谷川_`という同一idの参加者が**数時間にわたって断続的に**
+「同じidの古い参加者を除去→0人に→再度参加」を繰り返していた
+(`main.titech.binaural.me`、2026-09-27 14:45〜20:39頃)。
+
+**当初の仮説(同名衝突)は的外れだった。** 参加者idは表示名の先頭4文字
+(`Conference.ts`の`enter()`、`name.substring(0,4)`)——ここまでは合っていたが、
+「2人目には`_2`のような別idを振る仕組みがあった」というユーザーの記憶を手掛かりに
+`bmMediasoupServer/src/MainServer/mainServer.ts`を調べたところ、**`makeUniqueId()`
+という重複回避関数(356行目)は今もコードに存在し、`createPeer()`から呼ばれている**
+ことを確認——単純に消えたわけではなかった。
+
+**実際の原因は`binaural-meet`側の再接続処理にあった。**
+`DataConnection.connect()`(`src/models/conference/DataConnection.ts`)は、
+呼び出し時に古い`dataSocket`が残っていても`console.warn`するだけで、
+**古いソケットを閉じずに単に上書きしていた**。この古いソケットには
+`onClose`→`this.disconnect()`のリスナーがまだ付いたままなので、後から
+(サーバー側の切断がようやく届く等で)閉じられると:
+
+1. `disconnect()`が`'disconnect'`イベントを再度emitする——これが
+   `Conference.ts`の`onDataDisconnect`/`onRtcDisconnect`をもう一度起動し、
+   **再接続処理そのものが再接続の引き金を再生産する**フィードバックループになる。
+2. `disconnect()`は`this.peer`/`this.room`を参照して`PARTICIPANT_LEFT`を送るが、
+   この時点で`this.peer_`/`this.room_`は**新しい接続用に上書き済み**——
+   古いソケットの後始末のつもりが、**今まさに確立しようとしている新しい参加者を
+   自分で追い出す**結果になる。
+
+**修正**: `connect()`は、既存の`dataSocket`があればそのリスナー
+(`open`/`message`/`error`/`close`)を`removeEventListener`で外してから
+`close()`する(`disconnect()`は通さない——上記の理由でそれ自体が問題を起こすため)。
+リスナー参照は新しいフィールド`dataSocketListeners`に保持し、
+`onFirstMessage`→`onMessage`の差し替え時にも追従させる。`binaural-meet`
+リポジトリに`640ec49`としてcommit済み(**未push・未デプロイ**)。
+
+**未確認の点**: 実機で再現させて直接確認したわけではない
+(コードの読解から導いた修正)。`tsc --noEmit`・既存164件のテストは通過。
+`DataConnection`自体の単体テストは無い(WebSocket・グローバル`config`・
+`conference`シングルトンに強く依存しており、テスト基盤の追加は今回のスコープ外と
+判断)。
+
+## 2026-09-30 — 2台目のGPU機rtx5070ti2を追加し、空いている方を使う・両方空けば負荷分散する`pool`を実装 {#stt-gpu-pool}
+
+ユーザー要望:「STTと翻訳を新しい5070ti2 にも入れて、空いている方を使う、両方空いているときは
+負荷分散する仕組みを作ってください」。仕組みは`stt-translation#pool`、Apacheでやらなかった理由は
+`stt-translation#design`。
+
+**rtx5070ti2側**(Windows 11。ホスト側の記録はホストのCHANGELOG
+`rtx5070ti2-gpuwhisper`):
+
+- Python 3.11.9(ユーザースコープ)と、`control_api.py`用の`fastapi==0.141.1`・`uvicorn==0.52.2`
+- `C:\Home\work\gpuwhisper\`: rtx5070tiの`server.py`をそのままコピー(このリポジトリの
+  `gpu_whisper_server.py`ではない。`stt-sidecars/README.md#gpu`が言う手作業のコピーの方に揃えた)。
+  venvはrtx5070tiの`pip freeze`(48パッケージ、`nvidia-cublas-cu12==12.8.5.5`を含む)で作成。
+  `models/m2m100-418m`(928MB)もrtx5070tiからコピー。Whisper large-v3-turboは初回起動時に
+  HFから取得
+- `C:\Home\work\control_api.py`: rtx5070tiのものから`gpuwhisper`以外のモードを除いた縮小版
+  (API・ロックの実装は同じ)。タスク`ControlAPIStart`(ログオン時、rtx5070tiと同じ設定)で起動。
+  ファイアウォールで8100・8192の受信を許可
+
+**bmMediasoupServer**:
+
+- `src/MediaServer/GpuPool.ts`を新設: `groupIntoRungs`・`orderPool`(純粋関数)と、
+  `GpuLockReader`(`HttpSttBackend`にあったロック読み取りを切り出したもの)
+- `SttBackendSelector`: `pool`が同じエントリを1段にまとめ、空いているものの中から処理中の要求が
+  少ないものを選ぶ。失敗したら同じ段のもう1台で再試行。`SttBackendConfig`に`name`・`pool`を追加
+- `translation.ts`: エンドポイントにも`pool`・`gpuStatus`を追加。同じ選び方で、段の中で
+  ロック中・ブレーカーが開いたものを避ける。テスト用に`callBackend`をexport
+- **ロック読み取りの競合を修正**: 同時に来た2つ目の呼び出しが、1つ目の読み取りの最中に
+  キャッシュの初期値(「ロックなし」)を返していた。元の`HttpSttBackend`にもあった。
+  読み取り中は、後から来た呼び出しも同じ読み取りの結果を待つようにした。下のライブ確認で
+  見つけた
+- テスト: `GpuPool.test.ts`(8件)、`SttBackend.test.ts`にpoolの5件、
+  `translationPool.test.ts`(4件)。手動確認用に`sttPoolLive.ts`
+- 開発用の`config.js`(このチェックアウト、コミットしていない)を2台のpoolに変更
+
+**動作確認**:
+- `npm test`で`src/`の79件がすべて通過。`dist/`の6ファイルは古いビルド成果物をvitestが
+  拾って失敗しているだけで、変更前から同じ
+- `tsc --noEmit`が通過
+- rtx5070ti2を直接叩いた結果: `/health`が`{"device":"cuda","model":"large-v3-turbo",...,"translator":"m2m100"}`。
+  jfk.wav(11秒)の認識は、ウォームアップ後0.18秒(初回はCUDAの初期化で24秒)。
+  ja→zh/ko/enの翻訳は0.17秒
+- `sttPoolLive.ts`で実機2台に、haselab経由のsshトンネルでjfk.wavを投げた結果。どちらも
+  すでに`gpuwhisper`モードだったので、何も切り替えていない:
+  - 2台とも空いている: 8件、同時2本で、`{A: 4, B: 4}`と交互に振り分けられた
+  - rtx5070ti2のロックを取った: 修正前は`{A: 3, B: 1}`(上の競合)、修正後は`{A: 6}`。
+    確認後にロックは解放
+  - rtx5070ti2に届かない: `{A: 6}`
+
+**2026-10-01、本番に反映した**(ユーザーの承認による):
+
+1. `lm.haselab.net`に`/GPUWHISPER2/`(→`rtx5070ti2`の8192)と`/SWITCH5070TI2/`(→同8100)を
+   追加した。既存の`/GPUWHISPER/`・`/SWITCH5070TI/`と同じ認証ゲートを通す(ホスト側の記録は
+   ホストのCHANGELOG`rtx5070ti2-gpuwhisper`)。キーありで200、なしで302になることを確認
+2. bmMediasoupServerの`main`をpush(`9fae767`、別セッションのレビュー中に入った`88eb1b5`
+   「vitestが`dist/`を拾わないように」も一緒に。以後`npm test`は8ファイル79件がすべて通る)
+3. 本番3台の`config.js`を書き換えた。media1・media2は`stt.backends`のGPUエントリを
+   `name`付きの2つにし、両方`pool: 'gpu'`・`gpuMode: 'gpuwhisper'`。mainは
+   `translation.endpoints`を2つにし、両方`pool: 'gpu'`と各自の`gpuStatus`。書き換え前の
+   ファイルは各機の`/root/.config.js.pool-backup.20261001`
+4. `./deploy-prod.sh server-all 88eb1b5`。3台とも`520cbcf`からfast-forwardし、ビルドして
+   `pm2 restart`した(`bm`/`bmm`とも`online`)。ビルド後の`dist/config.js`が上の内容で
+   あることも確認
+
+`gpuMode`を2台とも付けたのは、rtx5070ti2が`gpuwhisper`しか持たない専用機で、切り替えても
+止まるものが無いため。rtx5070tiは以前と同じで、アイドルなら`gpuwhisper`へ切り替える
+(そのときComfyUI等は止まる)。
+
+デプロイ前に、別セッション(BM STT)がサンドボックスから、本番に書くURLをすべて叩いて
+確かめた。`/GPUWHISPER2/asr`はjfk.wavを0.49秒、`/translate`はja→en/zh/koを0.15秒、
+`/SWITCH5070TI2/status`・`/lock/status`も200。
+
+**本番での確認**(2026-10-01 22:31〜22:36、ユーザーの許可を得て実施): 別セッション(BM STT)が
+本番のbinaural.meにheadful Chromeで入った。部屋は実在しない`pooltest-20261001`・`…b`・`…c`、
+字幕ON、表示言語ja。ページ内でマイクを差し替えてjfk.wavを約14秒間隔で4回流し、これを3回やった。
+3回目は16発話がすべてfinalになり、すべてに日本語訳が付いた。並行して、こちらで2台の
+`server.log`を見て、`asr:`の行(途中結果の再認識を含む)を数えた:
+
+| 回 | rtx5070ti | rtx5070ti2 |
+|---|---|---|
+| 1 | 21 | 22 |
+| 2 | 22 | 21 |
+| 3 | 21 | 22 |
+
+**ほぼ半々に振り分けられている。** 翻訳(`translate:`の行)は1回目にだけ出て、rtx5070tiに2件、
+rtx5070ti2に3件。2回目以降は同じ文なので、mainのLRUキャッシュが答えている。
+この部屋を受け持ったmedia2のpm2ログには、22:31:44に`stt: using backend 'pool gpu'`が
+出ていた。media1には出ていない(この部屋を受け持っていない)。スクリーンショットは
+`logs/prod-e2e-joined.png`・`logs/prod-e2e-subtitles.png`。
+
+## 2026-10-02 — 13時の会議の切断を調査、再接続修正(640ec49)をデプロイ、STTのウォームアップを追加 {#meeting-1002-warmup}
+
+ユーザーから2点。「1時からミーティングをしました。その際、RTCサーバーの切断が起きたりしていました」と、
+「STTの初回のディレイが大きいことがありました。ウォームアップが必要なら、書き起こしONの会議が
+始まった時点でするように」。
+
+**切断の調査**(main・media1・media2のpm2ログ、13:00〜13:52):
+
+- **サーバーは落ちていない。** `bm`・`bmm`とも前日のデプロイ以降に再起動しておらず、メモリ不足で
+  落とされた記録も無い。media側に worker の異常は無い(`closetransport ... not found`は退出時の
+  後片付けの重複で無害)。STTのセッションは入り直しのたびに止まって再開していて、原因ではなく結果
+- mainのエラー扱いの切断は55件。RTCの websocket の閉じ方で分けると、1005が17件
+  (ページを閉じる・再読み込みするときに`index.tsx`の`beforeunload`が`conference.leave()`で閉じたもの)、
+  1001が16件(ページ遷移・再読み込み)、1006が8件(close が届かない=ネットワーク断。下山・湯本・QY・
+  長谷川_)。サーバー側の60秒タイムアウトが3件(QYのData 2回、長谷川_のRTC 1回)。
+  **約6割は参加者自身の再読み込み**で、なぜ再読み込みしたのかはサーバーのログからは分からない
+- 同じ規模の会議と比べると再読み込みが多い(9/10: join 55・エラー切断26・1005が1件、
+  9/27: 54・21・2件、今日: 68・55・17件)
+- `#dataconnection-reconnect-storm`と同じ症状が出ていた: 同じ人に別IDの接続が同時に存在する
+  (`下山尚也`・`下山尚也1`・`下山尚也2`、`長谷川_`・`長谷川_1`)、`Peer ... not found`の連発。
+  一度ネットワークが切れた人がこのループに入って、何度も入り直した可能性が高い
+
+**binaural-meet 640ec49をデプロイ**(ユーザーの指示): `./deploy-prod.sh client 640ec49`。
+binaural.meが200、配信中のバンドルに修正のコードが入っていること、`config.js`が`configTitech`で
+あることを確認。効いたかどうかは次の会議のログで分かる。
+
+**STTのウォームアップ**(仕組みは`stt-translation#warmup`):
+
+- 会議の時間帯のGPU側は最初から0.1〜0.6秒で返っていた(前日の確認でウォームアップ済みだったため)。
+  rtx5070ti2でモードを再起動して測ると、`/health`が答えるまで14秒、初回の認識が1.6秒、2回目以降0.2秒。
+  遅れの元は「GPUが別モード・未起動のときの切り替え待ち(その間はCPU)」と「起動直後の初回」
+- stt-sidecars `642e7f1`: `gpu_whisper_server.py`に`warm_up()`。2台の`server.py`
+  (手作業のコピー)にも同じ関数を足して入れ替え、モードを再起動した。再起動直後の初回の認識は
+  rtx5070ti2で0.24秒、rtx5070tiで0.18秒。ウォームアップ自体は4.2秒・0.5秒
+  (ホスト側の記録はホストのCHANGELOG`gpu-server-warmup`)
+- bmMediasoupServer `15dbda7`: `HttpSttBackend.warmUp()`・`SttBackendSelector.warmUp()`と、
+  `stt.ts`の`sttStart`で最初のセッションのときに呼ぶ処理。テストに5件追加して84件すべて通過。
+  本番と同じhttpsの経路で2台のpoolに`warmUp()`を呼ぶと、2台に1件ずつ認識要求が届き(0.4〜0.5秒)、
+  続けて呼んだ2回目は何も送らないことを実機で確認。BM STTからのレビューの指摘
+  (`sttStart`は参加者ごとに来るので抑制が要る、ロック中の機械には投げない、バックエンドの
+  インスタンスを経由して既存の抑制を効かせる)を反映した
+- stt-sidecars `199d37a`(前日のREADMEの追記)は、push前にLANのIPを書かない形に直した
+  (公開リポジトリで、それまでIPは書かれていなかったため)
+
+**本番デプロイ**(ユーザーの指示): `./deploy-prod.sh server-all 15dbda7`。main・media1・media2とも
+`15dbda7`で`online`、ビルド後の`dist/config.js`はデプロイ前と同じ(media: `gpuWhisper@rtx5070ti`・
+`gpuWhisper@rtx5070ti2`・`cpuWhisper`、main: 翻訳のエンドポイント2つ)。会議の始めにウォームアップが
+走ることの実会議での確認は、次の会議で(`BM_STT_DEBUG=1`でなければログには出ない。GPU機の
+`server.log`に、会議の開始直後に1秒の`asr:`が1件ずつ出れば、それがウォームアップ)。
