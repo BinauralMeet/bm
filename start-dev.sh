@@ -35,7 +35,7 @@ start_one(){  #  $1 = name, $2 = workdir, rest = command
 
 case "${1:-start}" in
   stop)
-    for n in client media main portfwd gputunnel; do stop_one "$n"; done
+    for n in client media main portfwd gputunnel gputunnel2; do stop_one "$n"; done
     exit 0
     ;;
   start) ;;
@@ -54,12 +54,19 @@ start_one main "$BM/bmMediasoupServer" npx ts-node-dev --respawn --inspect=8228 
 #  /SENSEVOICE), so the only way in is an SSH tunnel. Without it the media server's first STT
 #  backend simply fails and the next one answers -- the call still works, the transcript is just
 #  worse -- so a missing SSH key is a warning, not a failure.
+#  rtx5070ti2 is the second machine of the same 'gpu' pool. It needs two forwards, not one:
+#  unlike rtx5070ti -- whose switch/lock API is published as lm.haselab.net/SWITCH5070TI --
+#  it has no proxy path at all yet, so its control API (:8100) comes through the tunnel too.
+#  Ports 8190-8193 are taken (CPU sidecars on the host, ai4, rtx5070ti), hence 8194/8195.
 if [ -r /opt/aigw-ssh/config ]; then
   start_one gputunnel "$BM" ssh -F /opt/aigw-ssh/config -o BatchMode=yes \
     -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes \
     -N -L 127.0.0.1:8192:127.0.0.1:8192 rtx5070ti
+  start_one gputunnel2 "$BM" ssh -F /opt/aigw-ssh/config -o BatchMode=yes \
+    -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes \
+    -N -L 127.0.0.1:8194:127.0.0.1:8192 -L 127.0.0.1:8195:127.0.0.1:8100 rtx5070ti2
 else
-  echo "no /opt/aigw-ssh/config: skipping the GPU recognizer tunnel (STT falls back to CPU)"
+  echo "no /opt/aigw-ssh/config: skipping the GPU recognizer tunnels (STT falls back to CPU)"
 fi
 
 #  The speech-to-text backends that sit behind lm.haselab.net authenticate with the shared key
