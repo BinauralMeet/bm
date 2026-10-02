@@ -1142,3 +1142,41 @@ binaural.meが200、配信中のバンドルに修正のコードが入ってい
 `gpuWhisper@rtx5070ti2`・`cpuWhisper`、main: 翻訳のエンドポイント2つ)。会議の始めにウォームアップが
 走ることの実会議での確認は、次の会議で(`BM_STT_DEBUG=1`でなければログには出ない。GPU機の
 `server.log`に、会議の開始直後に1秒の`asr:`が1件ずつ出れば、それがウォームアップ)。
+
+## 2026-10-02 — 画像を貼れない不具合: Driveのアップロード先が消えていたのを直し、Gyazoが使えないときはDriveに回すようにした {#image-paste-drive-folder}
+
+ユーザーから「今日、画像を貼れないと言う不具合がありました」「Gyazoもだめでした」。
+
+**原因**:
+- **Drive**: アップロード先のフォルダIDが`GoogleServer.ts`に直接書かれていて、そのフォルダが削除されていた。
+  13:05の6回のアップロードは、すべて`GaxiosError: File not found`(404)で失敗していた。
+  サービスアカウント(`binaural-meet@binaural-meet.iam.gserviceaccount.com`)自体は正常で、
+  同じ共有ドライブの`loginInfo.json`は読めた
+- **Gyazo**: ブラウザから`upload.gyazo.com`へ直接送る作りだが、`upload.gyazo.com`はCORSを許可していない
+  (preflightが405、`Access-Control-*`ヘッダー無し)。ブラウザではネットワークエラーとして止まる。
+  加えて、コードに書かれたアクセストークンも無効になっていた(`/api/users/me`が401)。
+  CORSで止まった場合は元からDriveに回る作りだったので、今日貼れなかった直接の原因はDriveの方
+
+**直したこと**:
+- アップロード先は、ユーザーの判断で昔からのフォルダ「BMUploadImage」(共有ドライブ、リンクを知っている人は
+  閲覧のみ、サービスアカウントはfileOrganizer)。途中で別のフォルダ「bmUpload」(マイドライブ、リンクを
+  知っている人が編集者)も試したが、使っていない
+- bmMediasoupServer `c7f263c`: フォルダIDを`config.googleDriveUploadFolderId`から読む(このリポジトリは公開
+  なので、IDはコードに書かない)。未設定なら理由をログに出して断る。失敗のログを1行にした。本番mainの
+  `config.js`に設定を足して(元は`/root/.config.js.gdrive-backup.20261002`)`deploy-prod.sh server main c7f263c`。
+  media1・media2はアップロードに関わらないので`15dbda7`のまま
+- binaural-meet `2cae125`: Gyazoが理由を問わず失敗したらDriveに回す(以前はネットワークエラーのときだけ)。
+  401など、URLの無い応答も失敗として扱う。Driveが断ったとき(サーバーの`'upload error'`、5MB超)も
+  失敗として返す(以前はその文字列をファイルIDとして使っていた)。テスト164件通過。`deploy-prod.sh client`
+
+**動作確認**:
+- main上からサービスアカウントでBMUploadImageに1×1のPNGを上げ、ログインなしでサムネイルのURLが200・image/png
+  になることを確認(ゴミ箱へ。共有ドライブではfileOrganizerは完全削除できず404になるため、`trashed: true`)
+- 別セッション(BM STT)が本番のbinaural.meでテスト用の部屋`pastetest-20261002`に入り、18:19:31に画像を
+  1枚貼った。コンソールにはGyazoがCORSで止まった記録と「uploading to Google Drive instead」が出て、画像は
+  マップに表示された。サムネイルはログインなしで200。テスト画像はゴミ箱へ移した
+- このとき、前日のSTTのE2Eで同じブラウザのプロファイルに残っていた`showSubtitles: true`のせいで、無音の
+  マイクが書き起こされて「Thank you.」(Whisperの無音でのハルシネーション)が出た。BM STTがプロファイルを
+  元に戻した。テスト用の部屋なので他の人への影響は無い
+
+**残っているもの**: Gyazoをどうするか(ブラウザからは使えない。使うならサーバー経由にする必要がある)。
