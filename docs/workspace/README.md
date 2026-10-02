@@ -21,7 +21,8 @@ bm/                        # このリポジトリ。運用ドキュメントと
 ├── logs/                   # start-dev.sh / smoke.mjs の実行時出力 (git管理外)
 ├── start-dev.sh
 ├── smoke.mjs
-└── repro-avatar.mjs
+├── repro-avatar.mjs
+└── deploy-prod.sh          # 本番への反映。詳細は docs/deploy
 ```
 
 - **binaural-meet** — remote: `https://github.com/BinauralMeet/binaural-meet.git`
@@ -47,6 +48,7 @@ docsを読める。この `bm/docs/bin/doc` は一つ上の階層の `.gitmodule
 | `start-dev.sh` | main/media/client の3プロセス + portfwdリース更新を起動・停止する。詳細は `dev-environment#ops` |
 | `smoke.mjs` | headful debug Chrome 経由で実際に部屋に入り、ステータスダイアログをスクリーンショット。動作確認の主手段 |
 | `repro-avatar.mjs` | 3Dアバター関連の2バグ(`CHANGELOG#2026-08-02-vrm-cors-fix` 参照)の再現・回帰確認用スクリプト |
+| `deploy-prod.sh` | 本番(main/media1/media2/binaural.me)へのデプロイ。詳細は `deploy` トピック |
 
 ## 運用
 
