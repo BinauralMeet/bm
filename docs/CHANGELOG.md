@@ -1180,3 +1180,28 @@ binaural.meが200、配信中のバンドルに修正のコードが入ってい
   元に戻した。テスト用の部屋なので他の人への影響は無い
 
 **残っているもの**: Gyazoをどうするか(ブラウザからは使えない。使うならサーバー経由にする必要がある)。
+
+## 2026-10-02 — 接続の記録(`clientLog`)、各自のGyazoへのアップロード、CORS中継の作り直し(PDF表示の復旧) {#clientlog-gyazo-cors}
+
+ユーザーから「今後もWebRTCの不具合についてログ分析を。ログに不足あれば追加も」と、Gyazoについて
+「各自のGyazoにアップロードさせたい」。
+
+**接続の記録**(`bmMediasoupServer-architecture#client-log`): 13時の会議の調査で、サーバーのログだけでは
+参加者の再読み込みと再接続の区別が付かなかったため。binaural-meet `44d25cf` の`ConnectionLog.ts`と、
+bmMediasoupServer `070364c` の`clientLog`ハンドラ。
+
+**各自のGyazo**(`binaural-meet-image-upload`): ユーザーがGyazoにアプリを登録した(`client_id`は
+`public/config.js`、`client_secret`は本番mainの`config.js`の`gyazo`、元の`config.js`は
+`/root/.config.js.gyazo-backup.20261002`)。中継もmain経由のアップロードも使わない理由は同topicの`#why-own-gyazo`。
+binaural-meet `44d25cf`・`ab2deee`(別セッションのレビューで、最新の画像ではなく説明文の目印で探すように)、
+bmMediasoupServer `070364c`の`gyazoToken`。画像の共有ダイアログの「Google Drive」が`gdrve`という値になっていて、
+選んでもGyazoに送られていたのも直した。古い共有トークンが書かれていた未使用の`usePaste.ts`は削除。
+テスト: binaural-meet 171件、bmMediasoupServer 84件すべて通過。`deploy-prod.sh server-all 070364c`・
+`client 44d25cf`→`ab2deee`。
+
+**CORS中継**: binaural.meの`/cors_proxy/`(PDFの表示と、貼ったURLのMIMEの判定が必ず通る)は9月から止まっていた。
+いったん動かし直したところ、宛先を制限しない中継で、外からこのホストのループバックに要求を送らせられた(SSRF)ので止め、
+内部宛てをsystemdで遮断したサービスとして作り直した(ホストの`doc show bm-cors-proxy`)。binaural-meet `37c1570`:
+binaural.me自身のURLは中継を通さない。
+
+**未確認**: 実際のGyazoとの連携(ユーザーのGyazoのログインが要る)。本番での`clientLog`の記録(次に誰かが入室したとき)。
