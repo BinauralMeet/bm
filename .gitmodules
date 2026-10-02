@@ -10,3 +10,6 @@
 [submodule "docs/bin"]
 	path = docs/bin
 	url = https://github.com/haselab-net/doc-tool.git
+[submodule "stt-sidecars"]
+	path = stt-sidecars
+	url = https://github.com/BinauralMeet/stt-sidecars.git
