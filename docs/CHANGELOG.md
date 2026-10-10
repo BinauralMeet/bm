@@ -1294,3 +1294,20 @@ binaural-meet `d2c30f5`で`onRemoteLeft`が`closeReceiveTransport`を呼び、ma
 
 拡張子が`.pdf`で終わるURLは中継を通らずに直接PDFとして扱われる(`SharedContentCreator`)ので、
 **中継を通るのはPDF本体の取得だけ**。MIME判定で中継を使うのは、拡張子で判断が付かないURLのとき。
+
+## 2026-10-10(4) — mediasoup 3.19 でRTSP配信が始まらなくなっていた {#plaintransport-rtcpmux}
+
+vrc.jp のサーバーを最新に揃えた(ホストのCHANGELOG`vrcjp-server-latest`)ところ、vrcss から配信を始めても
+**サーバー側で何も起きなかった**。`plainTransport.connect`が`TypeError: cannot set rtcpPort with rtcpMux enabled`
+で失敗していた——rtcp-muxを有効にしているのに`rtcpPort`も渡しており、**3.11は黙って無視していたのを3.19は拒否する**。
+`6c7b77e`で渡すのをやめ、あわせて各段階の失敗をログに出すようにした(以前は、始まらないこと自体がログに残らなかった)。
+
+**titechも同じ3.19.7**(10/1以降のデプロイで上がっていた)なので、**そちらのRTSP配信も同じように壊れていて、
+`6c7b77e`で直っている**(本番デプロイ済み)。STTの`stt.ts`は`rtcpPort`を渡していないので影響を受けておらず、
+実際に動き続けていた。
+
+**動作確認**: vrc.jp で配信ID`OQiBmes0_1`(23:18:07開始・23:19:00停止)。クライアント(vrcss)側は偽の画面
+(canvasの`captureStream`)と無音トラックで`Streaming starts for 2 tracks.`まで到達、サーバー側は23:18:14に
+ffmpegが起動して`rtsp://localhost/OQiBmes0_1`へ送り、mediamtxが`2 tracks (H264, MPEG-4 Audio)`で受け付け、
+約49秒・494フレームを送って停止時に終了。**クライアント側からは「配信が始まらない」としか見えない種類の不具合**で、
+両側のログを突き合わせて初めて原因に届いた。
