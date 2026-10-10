@@ -1205,3 +1205,92 @@ bmMediasoupServer `070364c`の`gyazoToken`。画像の共有ダイアログの�
 binaural.me自身のURLは中継を通さない。
 
 **未確認**: 実際のGyazoとの連携(ユーザーのGyazoのログインが要る)。本番での`clientLog`の記録(次に誰かが入室したとき)。
+
+## 2026-10-10 — ログの調査: 配信のタイマーの漏れ(vrc.jp で1日16GB)と、サーバー側の consumer の閉じ忘れを直した {#stream-timer-and-consumer-leaks}
+
+ユーザーから「mediaのログが大きすぎるかもしれない」「bmmに異常な通信や再接続時の問題がないか」「時々つながらなくなる人がいる」。
+media1・media2・ai1(vrc.jp)のログと最新のソースを調べた。
+
+**1. 配信のタイマーが止まらない**(`streaming.ts`、本番にも同じコード): 配信を始めるたびに作る3秒ごとの resume +
+キーフレーム要求の`setInterval`が、止める条件`!streamer.process`を`remove()`が満たさないので、配信が終わっても止まらなかった。
+`remove()`は`streamers`を参加者の ID で消そうとしていたが、表は配信の ID で登録しているので、終わった配信も表に残っていた。
+vrc.jp では1か月で 553 個のタイマーが溜まり、閉じた consumer の resume を約300回/秒失敗させ、`media-error.log`が1日約16GB 増えていた
+(ai1 のディスクを 91% まで埋めた。調べ方はホストの CHANGELOG`vrcjp-stream-timer-leak`)。bmMediasoupServer `549c6fc`で、
+`remove()`がタイマーを止めて配信の ID で消すようにし、producer の準備中に止められた配信ではプロセスもタイマーも作らないようにした。
+
+**2. 受け取りをやめた consumer を、サーバーが閉じていなかった**: `Conference.removeConsumer`(優先度が下がって受け取りをやめるとき)は、
+mediasoup-client の`consumer.close()`を呼ぶだけだった。これはクライアントの側しか閉じず、サーバーに知らせる仕組みも無い
+(mediasoup-client 3.21.0 の`Transport`は consumer の`@close`で`stopReceiving`を呼ぶだけ)。サーバーにも閉じる受け口が無かったので、
+サーバー側の consumer は相手が抜けるまで送り続け、もう一度受け取るとさらに consumer が増えていた。受け取る映像の数を絞る仕組みが
+実際には効かず、回線の細い人ほど詰まりやすかったはず(実測の裏付けは無い。media に通信量の履歴が無いため)。
+bmMediasoupServer `549c6fc`に`closeConsumer`(`resumeConsumer`と同じく相手側の media に中継、consumer を作った本人だけが閉じられる)、
+binaural-meet `a405946`で`removeConsumer`がそれを送るようにした。既存の「作成時に自動で閉じる」仕組み(`handlers.ts`の createTransport の返事で、
+要求した参加者がもういなければ transport を閉じる)と、抜けたときの transport の後片付けは transport の単位で、consumer を1つずつ閉じるものではなかった。
+
+**3. consume の失敗の理由をログに出す**(`549c6fc`): 抜けた人の producer への consume が0.1秒ごとに失敗し続けることがある
+(`Conference`の`autorun`が失敗した producer を次の更新でまた頼むため。抜けた人が一覧から消えるまでの短い間だけ)。
+
+**4. 再読み込みの理由**(bmMediasoupServer `49fc94f`・binaural-meet `63de89e`): 10/9 の会議の`clientLog`で、Shuo が13:45:48と13:55:48に
+ちょうど10分おきに再読み込みしていた。キックや管理者の「再読み込み」でもクライアントは自分で再読み込みするが、`unload`としか残らなかった。
+main が`m_reload`・`m_kick`を送った人・宛先付きで`main_user.log`に残し、クライアントは`reloadByKick`・`reloadKickedRecently`・`reloadByRemote`を記録する。
+
+**未対応(ユーザーの判断待ち)** → 同じ日のうちに対応した(下の「transport の閉じ忘れ」):
+- **抜けた人の受信用 transport が、別の media では閉じられない**: 受信用の transport は相手側の media に作られる(`relayPeerToWorker`が
+  `remote`の worker に中継)が、抜けたときの`closeTransport`も`peerLeft`も、抜けた人自身の media(`peer.worker`)にしか送られない。
+  media が分かれていると、media のプロセスが再起動するまで transport(UDP・TCP のポート)が残る。退出のたびに出る
+  `closetransport: server-side transport ... not found`はこれ。今日のデプロイで media1・media2 を再起動したため、溜まっていた数は確かめられなかった
+- **media が1台の vrc.jp でも transport が溜まっていた**: 再起動前の vrc.jp の worker は約340個の transport を開いたままだった(使っている人は数人)。
+  上の理由では説明できないので、別の閉じ忘れがある。確立済みの TCP 接続の多くは Linode のアドレス(ポートスキャナーと思われる)
+- vrc.jp は古い版(`df2e05e`、`streaming.ts`だけローカルで修正)。`pong`の警告69万行は最新では出ない
+
+**動作確認**: bmMediasoupServer 84件・binaural-meet 171件のテストが通過。`deploy-prod.sh server-all 549c6fc`・`client a405946`。
+vrc.jp は修正を当てて media を再起動した後、`media-error.log`が20秒で 0 バイト。
+
+## 2026-10-10(2) — transport の閉じ忘れを直した(別の media の受信用、抜けた相手の受信用)、vrc.jp のゾンビの原因 {#transport-leaks}
+
+上の`#stream-timer-and-consumer-leaks`の未対応の2点。ユーザー:「順番に進めてください」。
+
+**1. 別の media にある受信用 transport**: bmMediasoupServer `aa46fb3`。main が「transport がどの media にあるか」を覚え
+(`mainServer.transportWorkers`、createTransport の返事で登録)、抜けたときの`closeTransport`をその media に送る。`peerLeft`は
+すべての media に送る(各 media は、その参加者の分を自分の`peers`に持っている)。入り直し(`peerJustBefore`)では古い参加者を消してから
+同じ ID で作り直すが、各 media への websocket は順に届くので、`peerLeft`が新しい接続の transport 作成より後に届くことは無い。
+
+**2. 抜けた相手の受信用 transport**: クライアントは相手が抜けても、その相手を受け取るための transport を閉じていなかった
+(ブラウザの RTCPeerConnection もサーバーの transport も、自分が抜けるまで残る。長くいるほど、出入りした相手の数だけ溜まる)。
+binaural-meet `d2c30f5`で`onRemoteLeft`が`closeReceiveTransport`を呼び、main は`aa46fb3`でクライアントからの`closeTransport`
+(本人の transport に限る)を受け付けて、正しい media に送る。
+
+**vrc.jp の約340個の transport**: 上の2つでは説明できなかった(vrc.jp の部屋は配信ごとに1人で使う)。vrc.jp の版`df2e05e`には
+`f9c5c44`(応答しない接続を`close()`ではなく`terminate()`で切る)が入っておらず、消えた参加者が main から消されず、transport も
+部屋も残っていた(ずっと残っていた4つの部屋は、1人が1回入ったきり出た記録が無い)。vrc.jp に当てて main を再起動した
+(ホストの CHANGELOG`vrcjp-terminate-backport`)。
+
+**動作確認**: bmMediasoupServer 84件・binaural-meet 171件のテストが通過。`deploy-prod.sh server-all aa46fb3`・`client d2c30f5`。
+**本番で実機確認済み**(部屋`transporttest-20261010`、bot2つを入れて`page.close()`で退室、mediasoupのUDPソケットを
+2秒ごとに数えた。WebRtcTransport1つにつきUDP1つ)。AとBは別々のmediaに乗った——サーバーの時刻で:
+
+| 時刻 | 出来事 | media1 | media2 |
+|---|---|---|---|
+| 23:00:06 | A 入室 | 0 | 1(Aの送信用) |
+| 23:00:22 | B 入室 | 2(Bの送信用 + Aの受信用) | 2(+ Bの受信用) |
+| 23:00:57 | B 退室 | 0 | 1 |
+| 23:01:17 | A 退室 | 0 | 0 |
+
+**B退室の行が、今回直した2点がどちらも効いていることを示している**: media1の2つが閉じただけでなく、
+**media2にあったBの受信用**も閉じた(これが「別のmediaにある受信用transport」で、以前は残っていた)。
+
+## 2026-10-10(3) — 本番で外部PDFの中身が出なかったのは`.mjs`のMIMEだった {#pdf-mjs-mime}
+
+`#clientlog-gyazo-cors`でCORS中継を作り直した後、外部PDFの表示を実機で確かめていなかったので確認したところ、
+**中身が出なかった**。原因は中継ではなく、binaural.meを配っているnginxが`.mjs`を`application/octet-stream`で
+返していたこと——ブラウザは**JavaScript以外のMIMEのモジュールスクリプトを実行しない**ので、pdf.jsが
+`pdf.worker.min-*.mjs`を読めず(`Setting up fake worker failed`)、PDFの取得まで到達していなかった。
+`.js`は`application/javascript`で返っていたので、`.mjs`だけが抜けていた。ホスト側で修正(ホストのCHANGELOG
+`nginx-mjs-mime`)。
+
+**動作確認**: 修正後、部屋`pdftest-20261010`で外部PDFのURLを貼り、キャッシュを無効にして実行。PDFのページが
+描画され(「Dummy PDF file」と「1 / 1」のページ送り、pdf.jsのcanvasは1500x2122)、`/cors_proxy/<外部URL>`が
+**200**。コンソールのエラーは0件。**作り直した中継が外部PDFを取れることも、これで確認できた**。
+
+拡張子が`.pdf`で終わるURLは中継を通らずに直接PDFとして扱われる(`SharedContentCreator`)ので、
+**中継を通るのはPDF本体の取得だけ**。MIME判定で中継を使うのは、拡張子で判断が付かないURLのとき。
