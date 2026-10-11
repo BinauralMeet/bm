@@ -313,6 +313,7 @@ for-in で自動登録するので、中継だけならサーバーのコード�
 | `SPEECH_INTERIM` | `stt_i` | Instant | `overwrite` | × | サーバー → 全員 |
 | `SPEECH_TEXT` | `stt_t` | Instant | `instant` | ○ | サーバー → 全員 |
 | `SPEECH_TRANSLATION` | `stt_tr` | Instant | `instant` | ○ | サーバー → 全員 |
+| `SPEECH_INTERIM_TRANSLATION` | `stt_itr` | Instant | `overwrite` | × | サーバー → 全員(GPUが空いているときだけ) |
 | `PARTICIPANT_STT_LANG` | `p_lang` | Stored | `overwrite` | ○ | 各自 → 全員(+サーバーが保持) |
 
 `merge` の選択理由: 途中結果は「最新の1件だけ意味がある」ので `overwrite`
@@ -685,7 +686,9 @@ GPU1枚で捌ける同時話者数は**未計測**。Phase 1 で実測してこ�
 - `streaming.ts` と同じく、**対象Producerが載っているworker上でしかSTTは動かない**
   (`media.ts` の `producers` マップを直接参照するため)。複数worker構成では
   話者ごとに別workerでSTTが走ることになる。
-- 翻訳は確定発話単位なので、長い一続きの発話では訳文が出るまで数秒空く。
+- 途中結果の翻訳は**GPUが空いているときだけ**(確定の翻訳が処理中でなく、プールに処理中0件の機械がある)。
+  混んでいると訳文は確定を待ち、長い一続きの発話では数秒空く。`translation.interim: false`で止められる。
+- **チャット欄には確定した発話しか出ない。** 途中結果は吹き出しだけに出る。
 - ここに書いた速度・遅延の数値は**いずれも見積もりで、実測ではない**。Phase 1 で測って置き換える。
 
 ## 設計判断の記録 {#design}

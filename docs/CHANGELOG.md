@@ -1311,3 +1311,39 @@ vrc.jp のサーバーを最新に揃えた(ホストのCHANGELOG`vrcjp-server-l
 ffmpegが起動して`rtsp://localhost/OQiBmes0_1`へ送り、mediamtxが`2 tracks (H264, MPEG-4 Audio)`で受け付け、
 約49秒・494フレームを送って停止時に終了。**クライアント側からは「配信が始まらない」としか見えない種類の不具合**で、
 両側のログを突き合わせて初めて原因に届いた。
+
+## 2026-10-11 — 再接続した人が消される不具合、バックグラウンドのタブの切断、途中結果の翻訳 {#reconnect-ping-interim-translation}
+
+RTC まわりの点検(読み取りのみ)とユーザーの指摘から、次の3つを直して本番に出した
+(サーバー`97761ce`・クライアント`6b07c38`)。
+
+- **再接続(`peerJustBefore`)した人を、古い接続の遅れた切断が消していた。** main は古い peer を同じ ID の
+  新しい peer に置き換えるが、数秒〜数十秒後に届く古い socket の`leave_error`が ID で`deletePeer`し、
+  新しい peer の`remoteLeft`・全 media への`peerLeft`・`peers`からの削除まで行っていた。本人はリロードまで
+  `Peer X not found.`。data 側の`PARTICIPANT_LEFT_BY_ERROR`も同じ構造。main のログで 08-26(2件)・09-27・
+  10-02(QY、2分半以上)に発生を確認。`deletePeer`と`PARTICIPANT_LEFT_BY_ERROR`はいま登録されている
+  オブジェクトのときだけ動き、置き換えた古い socket は`terminate()`して`sockMap`からも消す
+  (`sockMap`は切断時にも消すようにした。以前は増える一方だった)。
+- **バックグラウンドのタブから戻ると RTC 接続エラーが出て再接続していた。** Chrome はバックグラウンドのタブの
+  タイマーを最悪1分に1回まで間引くので、クライアントの`pong`が`websocketTimeout`(60秒)に間に合わない。
+  main・data とも WebSocket の ping を送り、ブラウザが自動で返す pong を受信として数える。data のタイムアウトは
+  `close(1007)`から`terminate()`へ(close は30秒ハンドシェイクを待ち、その間幽霊参加者が見えていた)。
+- **書き起こし**: 途中結果の認識が一度でも音声より遅いと、その話者の途中結果がセッションの終わりまで止まっていた。
+  15秒の休止に変えた。あわせて**途中結果も、GPUが空いているときだけ翻訳する**(`SPEECH_INTERIM_TRANSLATION`、
+  記録しない。1発話につき同時に1件、待つ間に来た文は最新だけ、確定後に戻った訳は捨てる。クライアントは確定の訳が
+  来るまでそれを表示)。
+
+**デプロイ**: `./deploy-prod.sh server-all 97761ce`、`./deploy-prod.sh client 6b07c38`。続けて「しばらく出ずに
+まとめて出る」の切り分けのため、media1・media2 の bmm を`BM_STT_DEBUG=1 pm2 restart bmm --update-env`
+→`pm2 save`で計測ログ付きにした(`stt: <sid> …ms audio, queued …ms, recognized in …ms`が出る)。
+原因が分かったら外す。workers は main に再登録済み(10:06:06・10:06:07)。
+
+**切り分けで分かったこと**: GPU の処理は0.1〜0.3秒、media→GPU の往復は約0.013秒。ffmpeg(RTP→PCM)が音を
+溜めていないかをこのホストで実測し、出力の遅れ0.04〜0.06秒・間隔最大0.03秒で溜めていなかった。
+同じ日のテストでは、話す言語が`zh`のままの接続が日本語を中国語として認識し、Whisper の定番の幻聴
+(「优优独播剧场」など)を出していた——言語設定の問題で、GPU の空きとは無関係。
+
+**残り**(点検で見つかった未修正分): 受信用 transport の`restartIce`が`remote`無しで本人の worker に送られ
+必ず失敗する、media が抜けても`peer.worker`が古いまま・クライアントの要求にタイムアウトが無い、
+失敗した transport の Promise が残る、`uploadFile`がリスナーを重ねて付ける、など。
+
