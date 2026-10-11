@@ -1347,3 +1347,29 @@ RTC まわりの点検(読み取りのみ)とユーザーの指摘から、次�
 必ず失敗する、media が抜けても`peer.worker`が古いまま・クライアントの要求にタイムアウトが無い、
 失敗した transport の Promise が残る、`uploadFile`がリスナーを重ねて付ける、など。
 
+## 2026-10-11(2) — 返事の来ない要求・戻らない受信 transport・スマホ復帰時の表示を直した {#request-timeout-transport-routing}
+
+`#reconnect-ping-interim-translation`の「残り」のうち、次を直して本番に出した(サーバー`af3684f`・クライアント`ec34c9a`)。
+
+- **要求を、その transport を持つ media へ送る。** main の`relayPeerToWorker`は peer から送り先を推測していたため、
+  受信用 transport の`restartIce`(相手側の media にある)が本人の media へ行き、必ず失敗していた。いまは
+  `transport`を含む要求は`transportWorkers`で引く。送り先が無い要求はログに出す(以前は黙って消えていた)。
+- **media が抜けたら、そこを使っていた peer を切って再接続させる。** `deleteWorker`は`peer.worker`を古いまま
+  残していたので、その人の要求は捨てられ続けた。受信用 transport がそこにある人も含めて RTC の socket を切る。
+- **クライアントの要求に20秒の返事待ちの上限。** transport の作成・接続・produce・consume が返ってこなければ部屋ごと
+  つなぎ直す(以前は永久に待ち、半分つながったまま固まった)。失敗した transport 作成の Promise を残さない。
+  ICE restart に失敗した受信用 transport は、ほかが生きていても再接続のきっかけにする。日誌に`requestTimeout`・
+  `iceRestartFailed`・`rtcClose`・`rtcError`を残す。
+- **古い socket のイベントを無視し、`uploadFile`がリスナーを重ねないようにした。**
+- **スマホでタブに戻ったとき**: Android は凍結したページの通信を切るので、戻ると必ず再接続になる(日誌で確認:
+  入室2分後にサーバー側で1006、戻った瞬間に`reconnectRtc`、約6秒で再入室)。防げないので、見え方を直した。
+  つながっていた接続が切れてから20秒は「再接続中」と出し、ファイアウォールの案内はその後だけにする。戻って10秒以内の
+  再接続は5秒待たずに0.3秒で始める。
+
+**デプロイ**: `./deploy-prod.sh server-all af3684f`、`./deploy-prod.sh client ec34c9a`。書き起こしの遅れは計測で
+解消を確認したので(待ち行列0〜1ms、確定まで0.23〜0.66秒、途中結果は約1秒ごと、ユーザーも「良くなっていた」)、
+計測ログを`BM_STT_DEBUG= pm2 restart bmm --update-env`→`pm2 save`で外した。workers は再登録済み(12:51:52・12:51:53)。
+
+**まだ直していないもの**: 入室ボタンの二重送信、consume 中に優先度が下がったときの consumer の取り残し、
+main のメッセージループの例外処理など(影響は小さいと見ている)。
+
