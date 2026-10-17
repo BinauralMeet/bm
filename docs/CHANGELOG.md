@@ -1433,3 +1433,24 @@ media1 は再起動しておらず正常だった。
 
 **デプロイ**: `./deploy-prod.sh server-all 462627d`。media2 は`131.112.248.58`で待ち受けるようになった。
 再入室(13:01:21)のあと、以前なら切れていた15秒を過ぎても`send failed`は出ていない。
+
+## 2026-10-17 — 受信の準備中に要らなくなった consumer が残っていた {#consumer-dropped-while-consuming}
+
+`#request-timeout-transport-routing`から「まだ直していないもの」に挙げていた、consume 中に優先度が下がったときの
+consumer の取り残しを直した(ユーザー:「コンシューマーの取り残しはやっても良い」)。10-16 の会議でも、media2 に
+「消えた producer を consume しようとした」エラーが数件出ていた。
+
+consume はサーバーとの往復が何回か要る。その途中で優先度の計算(または相手)が producer を外すと、
+`removeConsumer()`はまだ consumer が無いので何もせず、あとから届いた consumer がそのまま残った。サーバーは
+送り続け、クライアントは受け取り続けていた。
+
+**修正(クライアント`bb701e4`)**: `Conference`が、最新の判断で必要な producer を覚える(`wantedConsumers`)。
+届いた時点でもう要らない consumer は、サーバー側とクライアント側の両方ですぐ閉じる。そのとき track には
+触らない(同じ種類の新しい producer が、すでに track を差し替えている場合がある)。consume の途中でもう一度
+追加されたら、二重に consume せずその途中のものを使う(`pendingConsumers`)。この競合を再現するテストは無い
+(Conference を単体テストで組み立てるのが重い)。型チェックと単体テスト 175 件は通る。
+
+**デプロイ**: `./deploy-prod.sh client bb701e4`。binaural.me は`index-BBKECc1Y.js`を返す。
+
+**まだ直していないもの**: 入室ボタンの二重送信、main のメッセージループの例外処理、`/server/streams`のメッセージの
+使い回し、`clearMediasoup`の片付け。
