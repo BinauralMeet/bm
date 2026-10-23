@@ -1454,3 +1454,18 @@ consume はサーバーとの往復が何回か要る。その途中で優先度
 
 **まだ直していないもの**: 入室ボタンの二重送信、main のメッセージループの例外処理、`/server/streams`のメッセージの
 使い回し、`clearMediasoup`の片付け。
+
+## 2026-10-23 — 多言語の翻訳を M2M-100 418M から SMaLL-100 に替えた(rtx5070ti) {#2026-10-23-small100}
+
+ユーザー:「binaural meetの翻訳モデルの置き換えを検討してください」「こちらで、取得、実装できませんか？」「今直ぐしてください」。
+Eric さんの比較レポート(2026-10-22)を元にした。理由・弱いところ・戻し方は`stt-translation#ingest`。
+
+- `stt-sidecars`に`MULTI_KIND=small100`(f8f7a34、BinauralMeet/stt-sidecars に push 済み)。変換は同じ README の`#gpu`。
+- rtx5070ti: `C:\Home\work\gpuwhisper\models\small100-ct2-fp16`(646MB)を置き、`server.py`をリポジトリの`gpu_whisper_server.py`に
+  入れ替え(手で写した版に無かった`sidecar_auth`も入った。`STT_API_KEY`は未設定なので動きは同じ。控え`server.py.bak-20261023-pre-small100`)、
+  `control_api.py`の`start_gpuwhisper`を`MULTI_KIND="small100"`に(控え`control_api.py.bak-20261023-small100`)。
+  `activate/none`→ control_api の入れ直し(`ControlAPIStart`)→`activate/gpuwhisper`。
+- **確かめたこと**: 切り替える前に、別のポート(127.0.0.1:8193)で新しい版を SMaLL-100 で動かし、動いている M2M-100 と同じ 9 文を比べた
+  (合計 694 ms 対 1448 ms、訳はおおむね同等)。切り替え後`/health`が`translator: small100`、`/translate`が ja→zh/ko 220 ms・en→zh 18 ms、
+  gpuwhisper の GPU メモリ 3961→3639 MiB。
+- **まだ**: rtx5070ti2(配備の時に LAN に出てこなかった)。同じ手順で入れる。

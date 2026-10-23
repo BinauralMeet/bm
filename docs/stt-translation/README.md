@@ -268,9 +268,16 @@ zh/koはその後ろの多言語モデルが答える。落ちているエンド
 | 実装 | 担当 | 備考 |
 |---|---|---|
 | FuguMT(CTranslate2、CPU) | **ja↔en** | `bm/stt-sidecars/translate_server.py`。このホストのCPUで常時動く |
-| M2M-100 418M(CTranslate2、GPU) | **上記以外**(zh/ko等) | `gpu_whisper_server.py`の`/translate`。認識と同じプロセス・同じモード・同じ経路 |
+| SMaLL-100(CTranslate2、GPU。2026-10-23 まで M2M-100 418M) | **上記以外**(zh/ko等) | `gpu_whisper_server.py`の`/translate`(`MULTI_KIND=small100`)。認識と同じプロセス・同じモード・同じ経路。**rtx5070ti2 はまだ M2M-100**(下) |
 
-**M2M-100(MIT)を既定にした理由**: NLLB-200の方が訳は良いが**CC-BY-NC(非商用)**で、
+**SMaLL-100(MIT)に替えた理由**(2026-10-23): Eric さんの比較(2026-10-22)で、中国語向けの訳の質は M2M-100 418M と同等
+(AI による採点・chrF++ の差は誤差の範囲)、遅延はおよそ半分(EN→ZH p95 314→127 ms)、VRAM も少し減った。rtx5070ti で同じ 9 文を
+`/translate`に通すと 1448→694 ms、gpuwhisper の GPU メモリは 3961→3639 MiB。**弱いところ**: 「字幕」を「标题/제목/title」と訳す
+(M2M-100 は「字幕」)。ko→zh で繁体字を返したことがある。戻すのは rtx5070ti の`control_api.py`の`start_gpuwhisper`で
+`MULTI_KIND="m2m100"`・`MULTI_MODEL=…\m2m100-418m`にして gpuwhisper を入れ直す(控えは`control_api.py.bak-20261023-small100`)。
+rtx5070ti2 は配備の時に電源が入っておらず(LAN に出てこない)、まだ M2M-100。`pool`で両方を使うので、それまでは訳が機械によって変わる。
+
+**M2M-100(MIT)を既定にした理由**(2026-10-23 まで): NLLB-200の方が訳は良いが**CC-BY-NC(非商用)**で、
 BinauralMeetは公開サービスなので**ライセンスがサービス全体に付いて回る**。
 `MULTI_KIND=nllb`で切り替えられるようにはしてある。
 
