@@ -1,4 +1,4 @@
-# deploy — 本番(main/media1/media2/binaural.me)へのデプロイ
+# deploy — 本番(main/media1/ex1/binaural.me)へのデプロイ
 
 **いつ読むか**: 本番へコードを反映する(ブランチ追従・ビルド・pm2 restart) /
 `deploy-prod.sh` を使う・直す / config.js・public/config.jsを本番で
@@ -7,8 +7,8 @@
 ## 使い方 {#usage}
 
 ```sh
-./deploy-prod.sh server-all <bmMediasoupServerのコミット>   # main media1 media2 の順(ssh)
-./deploy-prod.sh server <main|media1|media2> <コミット>     # 1台だけ(ssh)
+./deploy-prod.sh server-all <bmMediasoupServerのコミット>   # main media1 ex1 の順(ssh)
+./deploy-prod.sh server <main|media1|ex1> <コミット>     # 1台だけ(ssh)
 ./deploy-prod.sh client <binaural-meetのコミット>           # binaural.me(このホスト、sshなし)
 ./deploy-prod.sh --dry-run ...                              # server系はssh内容の表示のみ、
                                                               # clientは実際にビルドまで行い
@@ -20,7 +20,7 @@
   `git merge --ff-only` で先端に一致するもの、かつpush済みのものを指定する。
 - **`vrc.jp`とは無関係。** このホスト(`ai1`)には`vrc.jp`という、ソースは同じ
   3リポジトリを共有するが**全く別のデプロイ**(`/root/webapp/`一式)が同居している。
-  `deploy-prod.sh`が触るのは`main`/`media1`/`media2`(titech.binaural.me)と
+  `deploy-prod.sh`が触るのは`main`/`media1`(titech.binaural.me)/`ex1`(haselab.net)と
   `binaural.me`だけで、`/root/webapp/`配下やvrc.jp用のpm2プロセスには一切触れない。
 
 ## 構成 {#arch}
@@ -30,14 +30,14 @@
 | ホスト | リポジトリ | 作業 | 再起動 |
 |---|---|---|---|
 | `main` | bmMediasoupServer(`/root/bmMediasoupServer`) | pull→`npm run build`(`npx tsc`)→`pm2 restart bm` | 要 |
-| `media1` / `media2` | bmMediasoupServer(`/root/bmMediasoupServer`) | 同上→`pm2 restart bmm` | 要 |
+| `media1` / `ex1` | bmMediasoupServer(`/root/bmMediasoupServer`) | 同上→`pm2 restart bmm` | 要 |
 | `binaural.me` | binaural-meet | `bm/binaural-meet`から`git worktree`で対象コミットをビルド→`/var/www/binaural.me`へ配置 | 不要(静的) |
 
-- `main`/`media1`/`media2`は`~/.ssh/config`の`main`/`media1`/`media2`エイリアス
+- `main`/`media1`/`ex1`は`~/.ssh/config`の`main`/`media1`/`ex1`エイリアス
   (`main.titech.binaural.me`等、`aiops`ユーザー)。`/root/bmMediasoupServer`は
   `root`所有なので、sshログイン後は`aiops`の**NOPASSWD sudo**でrootに昇格して操作する
   (`run_remote`が`ssh ... sudo -n bash -s`で流す)。pm2プロセス名は`main`が`bm`、
-  `media1`/`media2`が`bmm`——実機で確認済み(`#ops`)。
+  `media1`/`ex1`が`bmm`——実機で確認済み(`#ops`)。
 - `binaural.me`は**このホスト自身(`ai1`)**。DNS上`binaural.me`/`ai1.binaural.me`/
   `ai1.haselab.net`はすべて同じIPを指す。sshは不要で、`deploy-prod.sh`をこのホストで
   直接実行する。
