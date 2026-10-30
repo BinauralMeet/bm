@@ -1469,3 +1469,19 @@ Eric さんの比較レポート(2026-10-22)を元にした。理由・弱いと
   (合計 694 ms 対 1448 ms、訳はおおむね同等)。切り替え後`/health`が`translator: small100`、`/translate`が ja→zh/ko 220 ms・en→zh 18 ms、
   gpuwhisper の GPU メモリ 3961→3639 MiB。
 - **まだ**: rtx5070ti2(配備の時に LAN に出てこなかった)。同じ手順で入れる。
+
+## 2026-10-30 — media は media1(元 media2)と ex1 の 2 台に。ex1 は coturn なしで TURN を media1 に任せる {#2026-10-30-media1-ex1}
+
+ユーザー:「ex1の名前で、mediaもやる。coturnなし、turnはmedia1に任せるでいきたい」「いまの media2 を media1 にする」。
+
+- **bmMediasoupServer 115655c**: media サーバーがクライアントに渡す TURN の宛先を `config.js` の `turnHost` で変えられるようにした
+  (無ければ今まで通り自分のホスト名 = 自分の coturn)。`tsc --noEmit`・`vitest run`(92 件)が通った。main・media1 は 462627d のまま
+  (`turnHost` を使わないので上げる必要は無い)。
+- **media1(131.112.248.58、元 media2)**: ホスト名 media1.titech.binaural.me、DNS の media1.titech を .59 → .58(media2.titech は .58 のまま別名)、
+  証明書は media1 の名前で取り直し(media1・media2 の両方、coturn へは certbot の post フックで写す)、`pm2 restart bmm` で main に `media1_<pid>` で登録。
+- **ex1(131.112.248.59、ex1.haselab.net、元 debian-new4)**: Node 22(NodeSource、media1 と同じ)、`/root/bmMediasoupServer` を 115655c で
+  ビルド、`config.js` は media1 のものに `turnHost: "media1.titech.binaural.me"` を足したもの、`LM_HASELAB_API_KEY` は pm2 の env、
+  `ai4-stt-tunnel`(新しい鍵、ai4 の sttfwd から故障した旧 media1 の鍵を外して差し替え)、ffmpeg、RTC の 40000〜49999 を開けた。
+  main に `ex1_<pid>` で登録された。
+- `deploy-prod.sh` の対象を `main media1 ex1` に(`--dry-run server ex1 115655c` で確認)。
+- **未確認**: 実際の会議で ex1 に割り当てられた人が media1 の TURN を使えること(UDP が直接通る人は TURN を使わない)。

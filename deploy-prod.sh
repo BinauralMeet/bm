@@ -1,11 +1,11 @@
 #!/bin/bash
-#  本番(main/media1/media2/binaural.me)へ bmMediasoupServer / binaural-meet の
+#  本番(main/media1/ex1/binaural.me)へ bmMediasoupServer / binaural-meet の
 #  既定ブランチを指定コミットまで進め、ビルドして反映する。詳細は docs/deploy を参照。
 #
 #  使い方:
-#      ./deploy-prod.sh server <host> <commit>   # main / media1 / media2 いずれか1台 (ssh)
+#      ./deploy-prod.sh server <host> <commit>   # main / media1 / ex1 いずれか1台 (ssh)
 #      ./deploy-prod.sh client <commit>          # binaural.me (このホスト = ai1、ssh不要)
-#      ./deploy-prod.sh server-all <commit>      # main media1 media2 をこの順で全部
+#      ./deploy-prod.sh server-all <commit>      # main media1 ex1 をこの順で全部
 #      --dry-run を先頭に付けると、server/server-allはsshで実行する内容の表示のみ、
 #      clientはworktreeでのビルドまで行い配信ディレクトリへのコピー以降だけ省略する。
 #
@@ -14,7 +14,7 @@
 #      ./deploy-prod.sh client 18e13ae
 #
 #  安全設計:
-#   - main/media1/media2 (bmMediasoupServer): config.js は必ず退避してから戻す。
+#   - main/media1/ex1 (bmMediasoupServer): config.js は必ず退避してから戻す。
 #     git は fetch + `merge --ff-only` のみ (reset --hard/checkout . はしない)。
 #     進めた後にHEADが指定コミットと一致するか検証してから初めてビルドする。
 #   - binaural.me (このホスト自身 = ai1): 開発チェックアウト
@@ -28,11 +28,11 @@
 set -u
 
 # ---- ホストごとの設定 (未確認の値は要確認とコメントしてある) --------------------
-declare -A SERVER_REPO_DIR=( [main]=/root/bmMediasoupServer [media1]=/root/bmMediasoupServer [media2]=/root/bmMediasoupServer )
-declare -A SERVER_BRANCH=(   [main]=main [media1]=main [media2]=main )
+declare -A SERVER_REPO_DIR=( [main]=/root/bmMediasoupServer [media1]=/root/bmMediasoupServer [ex1]=/root/bmMediasoupServer )
+declare -A SERVER_BRANCH=(   [main]=main [media1]=main [ex1]=main )
 #  pm2のプロセス名。install_servers.shのコメント(main=bm, media=bmm)からの推定で未確認。
 #  実際の名前は `ssh <host> pm2 ls` で確認してから埋めること。
-declare -A SERVER_PM2_NAME=( [main]=bm [media1]=bmm [media2]=bmm )
+declare -A SERVER_PM2_NAME=( [main]=bm [media1]=bmm [ex1]=bmm )
 
 #  binaural.me はこのホスト自身(ai1、DNSはbinaural.me/ai1.binaural.me/ai1.haselab.netとも
 #  同じIP)。sshは使わずローカルでbuildする。
@@ -59,7 +59,7 @@ run_remote(){  # $1 = host, $2 = remote script (stdin)
   ssh -o BatchMode=yes "$host" sudo -n bash -s
 }
 
-deploy_server(){  # $1 = host (main|media1|media2), $2 = target commit
+deploy_server(){  # $1 = host (main|media1|ex1), $2 = target commit
   local host=$1 target=$2
   local dir=${SERVER_REPO_DIR[$host]:-} branch=${SERVER_BRANCH[$host]:-} pm2name=${SERVER_PM2_NAME[$host]:-}
   if [ -z "$dir" ]; then echo "unknown server host: $host" >&2; return 1; fi
@@ -151,7 +151,7 @@ case "${1:-}" in
     deploy_server "$2" "$3"
     ;;
   server-all)
-    for h in main media1 media2; do deploy_server "$h" "$2" || exit 1; done
+    for h in main media1 ex1; do deploy_server "$h" "$2" || exit 1; done
     ;;
   client)
     deploy_client "$2"
